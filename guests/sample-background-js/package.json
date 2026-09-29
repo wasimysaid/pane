@@ -1,0 +1,15 @@
+{
+  "name": "pane-sample-background-js",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pane's background sample, Ticks, in JavaScript",
+  "license": "Apache-2.0 OR MIT",
+  "type": "module",
+  "main": "src/index.js",
+  "pane": {
+    "scheduledTask": true
+  },
+  "devDependencies": {
+    "@pane/extension": "file:../js"
+  }
+}

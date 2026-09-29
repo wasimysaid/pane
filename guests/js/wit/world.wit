@@ -16,8 +16,9 @@
 // A command whose package.json sets `"pane": { ... }` options also exports
 // the interfaces they name: `rootResults` (wit/root-results.wit),
 // `indexedResults` (wit/applications.wit), `operations`
-// (wit/operations.wit), `takesQuery` (wit/query.wit) and `search`
-// (wit/search.wit); `files` makes it import the granted folder's listing
+// (wit/operations.wit), `takesQuery` (wit/query.wit), `search`
+// (wit/search.wit) and `scheduledTask` (wit/background.wit); `files` makes
+// it import the granted folder's listing
 // (wit/files.wit), which no other command imports. The build writes a world
 // `js-command` including this one with those exports and imports
 // (tools/componentize-js/pane_js.py).

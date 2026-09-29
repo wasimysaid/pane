@@ -16,6 +16,7 @@ members = [
     "sample-query",
     "sample-search",
     "sample-helper",
+    "sample-background",
     "fixtures/faulty",
     "fixtures/operations",
     "fixtures/old-api",

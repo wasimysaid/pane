@@ -308,6 +308,21 @@ must log the held search as abandoned; the service's 503, then the service
 stopped, are errors; restarted, a search lists results again. Windows retries a refused connection for about two seconds, so the offline step waits longer.
 **Not run on Windows yet.**
 
+## Scheduled tasks (#47)
+
+The smoke's scheduled task phase (screenshots 320 to 327, [scheduled tasks](../background.md#checks)),
+with a data folder of its own (`schedule-data`), installs the Background
+sample (Rust); nothing must have run (no count in its content). In Manage
+extensions, Enter on **Schedule: Ticks** turns it on: it runs at once, the
+row shows "Last run: Ticked 1 times" and `schedules.json` records the
+answer. Opening Ticks and choosing "Wait 10 seconds in each run", then
+turning the schedule off and on again, starts a run that waits (noted
+"started"); disabling the package meanwhile stops it, and after ten more
+seconds nothing was noted "finished" and the count did not move. Enabled
+again, the row says "Last run stopped: Background sample was disabled" and
+no run starts; turned off, `schedules.json` holds no task.
+**Not run on Windows yet.**
+
 ## Text input and accessibility findings
 
 - **Text input / IME (#20):** the smoke now also opens the Rust command's

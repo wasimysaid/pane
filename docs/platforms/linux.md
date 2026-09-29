@@ -722,6 +722,32 @@ whole smoke passed, and frames 160 to 169 were looked at.
 | Service stopped: "connection refused" | [168-offline.png](evidence/linux-x11/168-offline.png) |
 | Service back: results again | [169-back-online.png](evidence/linux-x11/169-back-online.png) |
 
+### Scheduled tasks (#47)
+
+The scheduled task phase ([scheduled tasks](../background.md#checks)), with
+a data folder of its own (`schedule-data`), installs the Background sample
+(Rust): nothing must have run (no count in its content). In Manage
+extensions, Enter on **Schedule: Ticks** turns it on: it runs at once, the
+row shows "Last run: Ticked 1 times" and `schedules.json` records the
+answer. Opening Ticks and choosing "Wait 10 seconds in each run", then
+turning the schedule off and on again, starts a run that waits ("Running
+now", noted "started"); disabling the package meanwhile stops it, and after
+ten more seconds nothing was noted "finished" and the count did not move.
+Enabled again, the row says "Last run stopped: Background sample was
+disabled" and no run starts; turned off, `schedules.json` holds no task.
+Run locally on 2026-09-29 (same system and Xvfb/lavapipe setup): all checks
+of the whole smoke passed, and frames 320 to 327 were looked at. The rows
+of Manage extensions show the data folder's path in their subtitles, so
+the evidence kept of those frames is cropped to the row.
+
+| Step | Evidence |
+| --- | --- |
+| Installed: nothing ran | [320-schedule-installed.png](evidence/linux-x11/320-schedule-installed.png) |
+| Schedule turned on: it ran at once | [322-schedule-on-cropped.png](evidence/linux-x11/322-schedule-on-cropped.png) |
+| Ticks opened, "Wait 10 seconds in each run" chosen | [323-schedule-wait-chosen.png](evidence/linux-x11/323-schedule-wait-chosen.png) |
+| Turned off and on: a run waits | [324-schedule-running-cropped.png](evidence/linux-x11/324-schedule-running-cropped.png) |
+| Disabled while it waited, enabled again: the run was stopped | [326-schedule-stopped-cropped.png](evidence/linux-x11/326-schedule-stopped-cropped.png) |
+
 ## Text input and accessibility findings
 
 - **Text input / IME (#20):** extension forms have a text field (GPUI CE's

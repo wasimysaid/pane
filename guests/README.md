@@ -698,6 +698,68 @@ The [JavaScript](sample-applications-js) and
 their commands list the applications and open one with `open(id)`; their
 packages in [`packages/`](packages) set `indexedResults`.
 
+## A scheduled task
+
+A command can run a task in the background every so many minutes, from 1
+to 1440, once the user turns its schedule on in Manage extensions
+(installing schedules nothing). Declare the schedule on the command in
+`pane.json`, and export `pane:extension/scheduled-task`
+([`wit/background.wit`](../wit/background.wit)) beside the command:
+
+```json
+{ "id": "ticks", "title": "Ticks", "component": "ticks.wasm",
+  "schedule": { "everyMinutes": 15 } }
+```
+
+```rust
+pane_guest::export!(Ticks);
+pane_guest::scheduled::export!(Ticks);
+
+impl pane_guest::scheduled::Guest for Ticks {
+    async fn run_task(command: String) -> Result<String, String> {
+        // One run: its answer is shown as the task's latest result, an
+        // error as its latest failure; a panic is a crash of the package.
+        Ok("Done".into())
+    }
+}
+```
+
+JavaScript or TypeScript: add `"pane": { "scheduledTask": true }` to
+`package.json` and export `scheduledTask`:
+
+```ts
+import type { ScheduledTask } from "@pane/extension";
+
+export const scheduledTask: ScheduledTask = {
+  async runTask(command) {
+    return "Done";
+  },
+};
+```
+
+What to expect ([scheduled tasks](../docs/background.md)):
+
+- Turned on, the task runs at once, then one interval after each run
+  began, never two runs at once; what fell due while Pane was closed or the
+  package disabled or paused runs once when it can.
+- Each run starts in an **instance of its own**: keep what the next run
+  needs in [extension data](#keeping-content-cache-and-credentials), not in
+  memory. Settings and content work as in a call; calling other packages'
+  operations is refused.
+- Disabling, reloading, updating or uninstalling the package, or turning
+  the schedule off, **stops a run where it awaits**: nothing after the
+  `await` runs, and its answer is discarded. Save what must survive a stop
+  before awaiting.
+- **Await rather than compute for long**: every extension's calls are
+  served on one thread, which a run computing without yielding holds.
+- An error is shown and the schedule goes on; crashes count towards
+  [pausing](../docs/pausing.md) the package like any crash.
+
+The background samples ([Rust](sample-background),
+[JavaScript](sample-background-js), [TypeScript](sample-background-ts);
+packages in [`packages/`](packages)) count each run, and their command
+chooses how the next runs behave (answer, fail, crash or wait 10 seconds).
+
 ## A command that takes a query
 
 The user can give any installed command an alias in Manage extensions, and

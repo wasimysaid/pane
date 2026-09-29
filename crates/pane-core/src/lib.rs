@@ -4,6 +4,7 @@
 pub mod applications;
 mod atomic;
 pub mod changes;
+pub mod clock;
 mod dependencies;
 pub mod develop;
 mod extension_data;
@@ -25,14 +26,16 @@ pub use helpers::runner::{MAX_HELPER_INPUT, MAX_HELPER_OUTPUT};
 #[doc(hidden)]
 pub use http::HttpLimits;
 pub use launcher::{
-    BuildFailure, CommandRegistration, CustomViewSnapshot, Development, FormField, FormView,
-    Launcher, LauncherView, Question, Row, Screen, Status, Unavailable,
+    BackgroundChanges, BuildFailure, CommandRegistration, CustomViewSnapshot, Development,
+    FormField, FormView, Launcher, LauncherView, Question, Row, ScheduledTask, Screen, Status,
+    TaskOutcome, Unavailable,
 };
 pub use links::LinkOpener;
 pub use operations::{MAX_CALL_DEPTH, MAX_OPERATION_JSON};
 pub use packages::{
     EXTENSION_API, InstalledPackage, MANIFEST_FILE, MANIFEST_VERSION, Manifest, ManifestCommand,
     ManifestHelper, ManifestOperation, PackageError, PackageIdentity, RetainedData, SavedData,
+    Schedule,
 };
 pub use pane_target::{Arch, Target};
 pub use platform::Platform;

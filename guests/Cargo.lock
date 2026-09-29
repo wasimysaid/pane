@@ -297,6 +297,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sample-background"
+version = "0.1.0"
+dependencies = [
+ "pane-guest",
+ "wasip3",
+]
+
+[[package]]
 name = "sample-dependencies"
 version = "0.1.0"
 dependencies = [

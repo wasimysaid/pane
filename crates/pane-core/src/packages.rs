@@ -397,6 +397,48 @@ pub struct ManifestCommand {
     /// an online service; root search never asks it. Its component then
     /// also exports `pane:extension/command-search`.
     pub search: bool,
+    /// How often the command's scheduled task runs once the user turns its
+    /// schedule on (`"schedule": { "everyMinutes": 15 }`); `None` for a
+    /// command without one. Its component then also exports
+    /// `pane:extension/scheduled-task`.
+    pub schedule: Option<Schedule>,
+}
+
+/// The one kind of schedule a command can declare: every so many minutes,
+/// from one minute to a day.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Schedule {
+    every_minutes: u32,
+}
+
+impl Schedule {
+    /// The shortest schedule: every minute.
+    pub const MIN_MINUTES: u32 = 1;
+    /// The longest schedule: once a day.
+    pub const MAX_MINUTES: u32 = 24 * 60;
+
+    /// How long after a run began the next one is due.
+    pub fn every(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(u64::from(self.every_minutes) * 60)
+    }
+}
+
+impl fmt::Display for Schedule {
+    /// "every minute", "every 15 minutes", "every hour", "every 2 hours".
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.every_minutes {
+            1 => f.write_str("every minute"),
+            60 => f.write_str("every hour"),
+            minutes if minutes % 60 == 0 => write!(f, "every {} hours", minutes / 60),
+            minutes => write!(f, "every {minutes} minutes"),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ScheduleJson {
+    every_minutes: u32,
 }
 
 #[derive(Deserialize)]
@@ -474,6 +516,8 @@ struct CommandJson {
     takes_query: bool,
     #[serde(default)]
     search: bool,
+    #[serde(default)]
+    schedule: Option<ScheduleJson>,
 }
 
 impl Manifest {
@@ -577,6 +621,7 @@ impl Manifest {
             indexed_results: commands().any(|command| command.indexed_results),
             query_command: commands().any(|command| command.takes_query),
             search: commands().any(|command| command.search),
+            scheduled_task: commands().any(|command| command.schedule.is_some()),
             operations: self
                 .operations
                 .iter()
@@ -643,6 +688,23 @@ impl Manifest {
                 command.platforms,
                 &format!("`platforms` of command `{}`", command.id),
             )?;
+            let schedule = match command.schedule {
+                Some(ScheduleJson { every_minutes })
+                    if (Schedule::MIN_MINUTES..=Schedule::MAX_MINUTES).contains(&every_minutes) =>
+                {
+                    Some(Schedule { every_minutes })
+                }
+                Some(ScheduleJson { every_minutes }) => {
+                    return Err(invalid(format!(
+                        "the schedule of command `{}` runs every {every_minutes} minutes; it \
+                         must be from {} to {} (a day)",
+                        command.id,
+                        Schedule::MIN_MINUTES,
+                        Schedule::MAX_MINUTES
+                    )));
+                }
+                None => None,
+            };
             commands.push(ManifestCommand {
                 id: command.id,
                 title: command.title,
@@ -653,6 +715,7 @@ impl Manifest {
                 indexed_results: command.indexed_results,
                 takes_query: command.takes_query,
                 search: command.search,
+                schedule,
             });
         }
         let mut operations: Vec<ManifestOperation> = Vec::new();
@@ -2194,6 +2257,67 @@ mod tests {
                 "local": "/src/a", "dir": "1", "dependencies": [{ "id": "b", "local": "/src/b" }]
             })
         );
+    }
+
+    /// The manifest of a package whose one command has `schedule`, as JSON.
+    fn scheduled(schedule: &str) -> Result<Manifest, PackageError> {
+        Manifest::parse(&format!(
+            r#"{{ "manifestVersion": 1, "title": "Ticks", "apiVersion": "0.1",
+                 "commands": [{{ "id": "tick", "title": "Tick", "component": "c.wasm",
+                                 "schedule": {schedule} }}] }}"#
+        ))
+    }
+
+    #[test]
+    fn a_schedule_runs_every_so_many_minutes_within_a_day() {
+        let manifest = scheduled(r#"{ "everyMinutes": 15 }"#).unwrap();
+        let schedule = manifest.commands[0].schedule.unwrap();
+        assert_eq!(schedule.every(), std::time::Duration::from_secs(15 * 60));
+        assert!(manifest.exports_of(Path::new("c.wasm")).scheduled_task);
+        assert_eq!(schedule.to_string(), "every 15 minutes");
+        assert_eq!(
+            scheduled(r#"{ "everyMinutes": 1 }"#).unwrap().commands[0]
+                .schedule
+                .unwrap()
+                .to_string(),
+            "every minute"
+        );
+        assert_eq!(
+            scheduled(r#"{ "everyMinutes": 120 }"#).unwrap().commands[0]
+                .schedule
+                .unwrap()
+                .to_string(),
+            "every 2 hours"
+        );
+        scheduled(r#"{ "everyMinutes": 1440 }"#).unwrap();
+
+        for (schedule, problem) in [
+            (
+                r#"{ "everyMinutes": 0 }"#,
+                "the schedule of command `tick` runs every 0 minutes; it must be from 1 to 1440 (a day)",
+            ),
+            (
+                r#"{ "everyMinutes": 1441 }"#,
+                "the schedule of command `tick` runs every 1441 minutes; it must be from 1 to 1440 (a day)",
+            ),
+        ] {
+            assert_eq!(
+                scheduled(schedule).unwrap_err().to_string(),
+                PackageError::InvalidManifest(problem.into()).to_string()
+            );
+        }
+        // One kind of schedule: anything else is refused, not ignored.
+        assert!(scheduled(r#"{ "cron": "* * * * *" }"#).is_err());
+        assert!(scheduled(r#"{ "everyMinutes": 5, "at": "09:00" }"#).is_err());
+        assert!(scheduled(r#""15m""#).is_err());
+        // A command without one has none, and exports nothing for it.
+        let plain = Manifest::parse(
+            r#"{ "manifestVersion": 1, "title": "Plain", "apiVersion": "0.1",
+                 "commands": [{ "id": "c", "title": "C", "component": "c.wasm" }] }"#,
+        )
+        .unwrap();
+        assert_eq!(plain.commands[0].schedule, None);
+        assert!(!plain.exports_of(Path::new("c.wasm")).scheduled_task);
     }
 
     /// This test binary: a program for this system's target.

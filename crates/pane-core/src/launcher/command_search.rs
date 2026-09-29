@@ -21,7 +21,7 @@ use std::pin::Pin;
 
 use super::{CommandList, Entry, Launcher, Row, Screen, State, Status, stopped};
 use crate::extension_data::PackageData;
-use crate::runtime::{CallError, SearchResult, StopSearch, View};
+use crate::runtime::{CallError, SearchResult, StopCall, View};
 
 /// The search of an open command that searches as the user types.
 pub(super) struct Searching {
@@ -31,7 +31,7 @@ pub(super) struct Searching {
     /// its search field is blank; `None` until the text is first set.
     list: Option<CommandList>,
     /// Stops the search in progress, if one is; dropping it stops it.
-    in_progress: Option<StopSearch>,
+    in_progress: Option<StopCall>,
 }
 
 impl Searching {

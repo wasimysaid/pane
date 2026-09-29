@@ -15,7 +15,7 @@ package's current generation, failed on its own.
 | Failure | Paused | Why |
 | --- | --- | --- |
 | A component could not be loaded or instantiated, or a reload's new code trapped as it started (a [startup failure](../CONTEXT.md)) | At once | Starting it again would fail the same way. |
-| A guest call trapped (a crash): opening a command, an action, a form, a custom view's event, drawing or destructor, root results, indexed results, a query sent to a command through its alias or as a fallback, or an operation another package called | On the **3rd crash within 5 minutes** | A broken command stops failing soon; one bad input does not stop an extension that otherwise works. |
+| A guest call trapped (a crash): opening a command, an action, a form, a custom view's event, drawing or destructor, root results, indexed results, a query sent to a command through its alias or as a fallback, an operation another package called, or a [scheduled task](background.md)'s run in the background (#47) | On the **3rd crash within 5 minutes** | A broken command stops failing soon; one bad input does not stop an extension that otherwise works. |
 
 These are explicit choices, not measurements (`CRASHES_BEFORE_PAUSE` and
 `CRASH_WINDOW` in
@@ -37,7 +37,8 @@ What is **not** a failure of the package:
   a refused view): an expected outcome of code that runs. It never pauses
   it, however often it happens.
 - A **call stopped** because its generation, or that of a caller in its
-  chain, ended (disable, reload, update, uninstall). A package serving an
+  chain, ended (disable, reload, update, uninstall), and a scheduled task's
+  run stopped the same way or because the user turned its schedule off. A package serving an
   operation for a stopped caller loses its instance and restarts afresh on
   its next call, as after a crash ([generations](generations.md#what-stopping-costs));
   that is not counted.

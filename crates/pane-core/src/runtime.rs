@@ -95,6 +95,15 @@ mod search_bindings {
     });
 }
 
+/// The `scheduled-task` export of a command with a schedule.
+mod scheduled_bindings {
+    wasmtime::component::bindgen!({
+        path: "../../wit",
+        world: "scheduled-task-provider",
+        exports: { default: async | store },
+    });
+}
+
 /// The `published-operations` export of a component serving operations.
 mod operations_bindings {
     wasmtime::component::bindgen!({
@@ -140,6 +149,9 @@ const OPERATIONS_INTERFACE: &str = "pane:extension/published-operations@0.1.0";
 /// The interface a command that searches as the user types also exports.
 const COMMAND_SEARCH_INTERFACE: &str = "pane:extension/command-search@0.1.0";
 
+/// The interface a command with a schedule also exports.
+const SCHEDULED_TASK_INTERFACE: &str = "pane:extension/scheduled-task@0.1.0";
+
 /// What a result a command answers with shows as a row: the fields its
 /// computed root results, indexed results and search results share (each
 /// interface's WIT declares its own record, as a WIT record cannot extend
@@ -156,16 +168,17 @@ pub(crate) struct ResultListing {
 /// One thing a command's search found, listed as a row of the command.
 pub(crate) type SearchResult = ResultListing;
 
-/// Stops a search that is no longer needed: when it is stopped or dropped,
-/// the search is not started if it has not been, and stopped where its guest
-/// waits if it has (see [`Runtime::search_with`]).
-pub(crate) struct StopSearch(#[allow(dead_code)] oneshot::Sender<()>);
+/// Stops a search, or background work, that is no longer needed: when it
+/// is stopped or dropped, the work is not started if it has not been, and
+/// stopped where its guest waits if it has (see [`Runtime::search_with`]
+/// and [`Runtime::run_task_with`]).
+pub(crate) struct StopCall(#[allow(dead_code)] oneshot::Sender<()>);
 
-/// Tells the runtime that a search was stopped.
-struct SearchStopped(oneshot::Receiver<()>);
+/// Tells the runtime that a search, or background work, was stopped.
+struct CallStopped(oneshot::Receiver<()>);
 
-impl SearchStopped {
-    /// Whether the search has been stopped.
+impl CallStopped {
+    /// Whether it has been stopped.
     fn stopped(&mut self) -> bool {
         !matches!(self.0.try_recv(), Err(oneshot::error::TryRecvError::Empty))
     }
@@ -183,10 +196,11 @@ impl SearchStopped {
 /// meanwhile, as it serves one call at a time.
 pub(crate) const SEARCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(150);
 
-/// A way to stop a search, and what the runtime watches for it.
-fn stoppable() -> (StopSearch, SearchStopped) {
+/// A way to stop a search or background work, and what the runtime watches
+/// for it.
+fn stoppable() -> (StopCall, CallStopped) {
     let (stop, stopped) = oneshot::channel();
-    (StopSearch(stop), SearchStopped(stopped))
+    (StopCall(stop), CallStopped(stopped))
 }
 
 /// A result a command computed from root search's query.
@@ -236,6 +250,15 @@ pub(crate) struct Exports {
     /// `command-search`: it searches as the user types into its own search
     /// field.
     pub search: bool,
+    /// `scheduled-task`: it runs a scheduled task.
+    pub scheduled_task: bool,
+}
+
+/// Work an installed package does in the background, beside the calls the
+/// runtime serves (see [`Runtime::run_task_with`]).
+pub(crate) enum Work {
+    /// One run of the scheduled task of the command with this manifest id.
+    Task { command: String },
 }
 
 /// The system's applications as the runtime's guests and the launcher see
@@ -618,8 +641,18 @@ enum Request {
         command: String,
         query: String,
         data: Option<PackageData>,
-        stopped: SearchStopped,
+        stopped: CallStopped,
         reply: oneshot::Sender<Result<Vec<SearchResult>, CallError>>,
+    },
+    Background {
+        component: PathBuf,
+        work: Work,
+        data: PackageData,
+        stopped: CallStopped,
+        reply: oneshot::Sender<Result<String, CallError>>,
+    },
+    BackgroundRunning {
+        reply: oneshot::Sender<Vec<PathBuf>>,
     },
     Forget {
         components: Vec<PathBuf>,
@@ -972,7 +1005,7 @@ impl Runtime {
     /// saves `data`. Starts its instance if it has none.
     ///
     /// The search is sent at once; the returned future waits for its
-    /// answer. Stopping or dropping the returned [`StopSearch`] stops it:
+    /// answer. Stopping or dropping the returned [`StopCall`] stops it:
     /// a search queued behind other calls is then never started, and one
     /// waiting inside the guest (on a web request, say) is dropped with its
     /// instance, as when a generation ends; either answers
@@ -986,7 +1019,7 @@ impl Runtime {
         query: &str,
         data: Option<PackageData>,
     ) -> (
-        StopSearch,
+        StopCall,
         impl Future<Output = Result<Vec<SearchResult>, CallError>> + Send + 'static,
     ) {
         let (stop, watched) = stoppable();
@@ -1003,6 +1036,73 @@ impl Runtime {
             response,
         );
         (stop, answer)
+    }
+
+    /// Runs the scheduled task of the command with manifest id `command` in
+    /// `component` once, in the background, with `data`, the package's in
+    /// its current generation; the task reads and saves it.
+    ///
+    /// Background work is not a call: the runtime starts it in an instance
+    /// of its own (not the command's), which goes when it ends, and serves
+    /// the calls queued meanwhile while it waits (on a clock, a web
+    /// request), instead of after it. It is sent at once; the returned
+    /// future waits for its answer. It stops where it waits, with its
+    /// instance, and answers as a stopped call does, when the generation of
+    /// `data` ends; stopping or dropping the returned [`StopCall`] stops it
+    /// too, and it answers [`CallError::Cancelled`]. Its code cannot call
+    /// operations (they are served only in a call's own frame, so they are
+    /// refused). A trap is a crash of the package, reported as any other.
+    pub(crate) fn run_task_with(
+        &self,
+        component: &Path,
+        command: &str,
+        data: PackageData,
+    ) -> (
+        StopCall,
+        impl Future<Output = Result<String, CallError>> + Send + 'static,
+    ) {
+        let work = Work::Task {
+            command: command.to_owned(),
+        };
+        self.background(component, work, data)
+    }
+
+    /// Starts `work` of the package in `component` in the background (see
+    /// [`Runtime::run_task_with`]).
+    fn background(
+        &self,
+        component: &Path,
+        work: Work,
+        data: PackageData,
+    ) -> (
+        StopCall,
+        impl Future<Output = Result<String, CallError>> + Send + 'static,
+    ) {
+        let (stop, stopped) = stoppable();
+        let (reply, response) = oneshot::channel();
+        let answer = self.call(
+            Request::Background {
+                component: component.to_path_buf(),
+                work,
+                data,
+                stopped,
+                reply,
+            },
+            response,
+        );
+        (stop, answer)
+    }
+
+    /// The components whose background work is running, counting the
+    /// requests sent before this call, one per piece of work, in no
+    /// particular order. A diagnostic for tests and logs, like
+    /// [`Runtime::running`], which lists only the instances serving calls.
+    pub async fn background_running(&self) -> Vec<PathBuf> {
+        let (reply, response) = oneshot::channel();
+        if self.send(Request::BackgroundRunning { reply }).is_err() {
+            return Vec::new();
+        }
+        response.await.unwrap_or_default()
     }
 
     /// Submits the form of `item_id` in the command in `component`. A
@@ -1448,6 +1548,25 @@ struct Instance {
     operations: Option<operations_bindings::OperationsProvider>,
     /// Its search export, if it searches as the user types.
     command_search: Option<search_bindings::CommandSearchProvider>,
+    /// Its scheduled task export, if it has a schedule.
+    scheduled_task: Option<scheduled_bindings::ScheduledTaskProvider>,
+}
+
+/// What background work's guest answered, or how it failed.
+type Outcome = wasmtime::Result<wasmtime::Result<Result<String, String>>>;
+
+/// Background work running beside the calls the runtime serves, in an
+/// instance of its own, which its task owns (see [`Runtime::run_task_with`]).
+struct Background {
+    component: PathBuf,
+    data: PackageData,
+    /// Resolves when the work's generation ends.
+    end: std::pin::Pin<Box<dyn Future<Output = End> + Send>>,
+    /// Resolves when whoever started it stops it.
+    stopped: CallStopped,
+    /// The guest's run, owning the instance.
+    task: std::pin::Pin<Box<dyn Future<Output = Outcome> + Send>>,
+    reply: oneshot::Sender<Result<String, CallError>>,
 }
 
 /// A custom view open in a guest instance.
@@ -1498,6 +1617,9 @@ struct Host {
     /// The generations of the calls in the chain that have one, outermost
     /// first: when any ends, the calls from it inward stop.
     owners: Vec<Generation>,
+    /// Background work running beside the calls: polled whenever the thread
+    /// waits, for the next request or inside a call.
+    background: Vec<Background>,
     /// Finds and opens the system's applications for guests.
     applications: SharedApplications,
     /// Guests' web requests, shared with the threads that replace this one.
@@ -1665,6 +1787,14 @@ impl Code {
                 ))
             })?;
         }
+        if exports.scheduled_task {
+            scheduled_bindings::ScheduledTaskProviderPre::new(pre.clone()).map_err(|error| {
+                CallError::Interface(format!(
+                    "its manifest gives it a schedule, but it does not export \
+                     {SCHEDULED_TASK_INTERFACE} with the functions Pane calls: {error:#}"
+                ))
+            })?;
+        }
         bindings::ExtensionWithFilesPre::new(pre).map_err(interface)?;
         Ok(Checked { network })
     }
@@ -1689,22 +1819,25 @@ impl Host {
             waiting_calls: VecDeque::new(),
             chain: Vec::new(),
             owners: Vec::new(),
+            background: Vec::new(),
             applications: shared.applications.clone(),
             network: shared.network.clone(),
             files: shared.files.clone(),
         }
     }
 
-    /// The next request, or `None` once every handle is gone. An injected
-    /// [`Fault::Crash`] panics here while the thread waits.
+    /// The next request, or `None` once every handle is gone, serving the
+    /// background work meanwhile. An injected [`Fault::Crash`] panics here
+    /// while the thread waits.
     async fn next_request(
-        &self,
+        &mut self,
         requests: &mut mpsc::UnboundedReceiver<Request>,
     ) -> Option<Request> {
         let faults = self.faults.clone();
         let mut waiting = std::pin::pin!(faults.waiting());
         std::future::poll_fn(|cx| {
             faults.check(waiting.as_mut(), cx);
+            poll_background(&mut self.background, &self.health, cx);
             requests.poll_recv(cx)
         })
         .await
@@ -1771,6 +1904,20 @@ impl Host {
                 } => {
                     let result = self.search(&component, command, query, data, stopped).await;
                     let _ = reply.send(result);
+                }
+                Request::Background {
+                    component,
+                    work,
+                    data,
+                    stopped,
+                    reply,
+                } => {
+                    self.start_background(component, work, data, stopped, reply)
+                        .await;
+                }
+                Request::BackgroundRunning { reply } => {
+                    let running = self.background.iter().map(|work| work.component.clone());
+                    let _ = reply.send(running.collect());
                 }
                 Request::Forget { components } => {
                     for component in &components {
@@ -2073,7 +2220,7 @@ impl Host {
         id: String,
         query: String,
         data: Option<PackageData>,
-        mut stopped: SearchStopped,
+        mut stopped: CallStopped,
     ) -> Result<Vec<SearchResult>, CallError> {
         // Replaced while it waited in the queue, or soon after: it is not
         // started.
@@ -2252,6 +2399,7 @@ impl Host {
             loop {
                 let next = std::future::poll_fn(|cx| {
                     faults.check(waiting.as_mut(), cx);
+                    poll_background(&mut self.background, &self.health, cx);
                     for end in &mut ends {
                         if let Poll::Ready(end) = end.as_mut().poll(cx) {
                             return Poll::Ready(Next::Stopped(end));
@@ -2462,6 +2610,65 @@ impl Host {
         }
     }
 
+    /// Starts `work` of the package in `path` in the background, in an
+    /// instance of its own, unless its generation has ended or it was
+    /// stopped already; `reply` answers once it ends (see
+    /// [`poll_background`]).
+    async fn start_background(
+        &mut self,
+        path: PathBuf,
+        work: Work,
+        data: PackageData,
+        mut stopped: CallStopped,
+        reply: oneshot::Sender<Result<String, CallError>>,
+    ) {
+        if let Some(end) = data.stopped() {
+            let _ = reply.send(Err(ended(end)));
+            return;
+        }
+        if stopped.stopped() {
+            let _ = reply.send(Err(CallError::Cancelled));
+            return;
+        }
+        let instance = match self.new_instance(&path, Some(data.clone())).await {
+            Ok(instance) => instance,
+            Err(error) => {
+                self.report(&path, Some(&data), Health::FailedToStart(error.clone()));
+                let _ = reply.send(Err(error));
+                return;
+            }
+        };
+        let task: std::pin::Pin<Box<dyn Future<Output = Outcome> + Send>> = match work {
+            Work::Task { command } => {
+                let Some(task) = instance
+                    .scheduled_task
+                    .as_ref()
+                    .map(|provider| provider.pane_extension_scheduled_task().clone())
+                else {
+                    let _ = reply.send(Err(CallError::Interface(format!(
+                        "it does not export {SCHEDULED_TASK_INTERFACE}"
+                    ))));
+                    return;
+                };
+                Box::pin(async move {
+                    let mut instance = instance;
+                    instance
+                        .store
+                        .run_concurrent(async |store| task.call_run_task(store, command).await)
+                        .await
+                })
+            }
+        };
+        self.background.push(Background {
+            component: path,
+            end: Box::pin(data.generation().wait_end()),
+            data,
+            stopped,
+            task,
+            reply,
+        });
+    }
+
     /// Returns the live instance for `path` in the generation of `data`,
     /// instantiating it on first use. A call whose generation has ended (its
     /// package was disabled, reloaded or updated since it was asked for) gets
@@ -2499,6 +2706,18 @@ impl Host {
         path: &Path,
         data: Option<PackageData>,
     ) -> Result<(), CallError> {
+        let instance = self.new_instance(path, data).await?;
+        self.instances.insert(path.to_path_buf(), instance);
+        Ok(())
+    }
+
+    /// Loads and instantiates `path` with `data`, as an instance the caller
+    /// keeps.
+    async fn new_instance(
+        &mut self,
+        path: &Path,
+        data: Option<PackageData>,
+    ) -> Result<Instance, CallError> {
         let component = self.component(path)?.clone();
         let mut store = Store::new(
             &self.code.engine,
@@ -2541,19 +2760,19 @@ impl Host {
         // Only a command that searches as the user types exports it.
         let command_search =
             search_bindings::CommandSearchProvider::new(&mut store, &instance).ok();
-        self.instances.insert(
-            path.to_path_buf(),
-            Instance {
-                store,
-                bindings,
-                root_results,
-                indexed_results,
-                query_command,
-                operations,
-                command_search,
-            },
-        );
-        Ok(())
+        // Only a command with a schedule exports its task.
+        let scheduled_task =
+            scheduled_bindings::ScheduledTaskProvider::new(&mut store, &instance).ok();
+        Ok(Instance {
+            store,
+            bindings,
+            root_results,
+            indexed_results,
+            query_command,
+            operations,
+            command_search,
+            scheduled_task,
+        })
     }
 
     /// Compiles `path` once (see [`Code::compile`]).
@@ -2563,6 +2782,53 @@ impl Host {
             self.components.insert(path.to_path_buf(), component);
         }
         Ok(&self.components[path])
+    }
+}
+
+/// Polls each piece of `background` work, answering and dropping, with its
+/// instance, the work that ended: its guest answered, trapped (a crash of
+/// its package, which `health` is told of), its generation ended (a result
+/// completing anyway is discarded) or it was stopped.
+fn poll_background(
+    background: &mut Vec<Background>,
+    health: &Mutex<Option<HealthReport>>,
+    cx: &mut std::task::Context<'_>,
+) {
+    use std::task::Poll;
+    let mut index = 0;
+    while index < background.len() {
+        let work = &mut background[index];
+        let answer = if let Poll::Ready(end) = work.end.as_mut().poll(cx) {
+            Some(Err(ended(end)))
+        } else if std::pin::Pin::new(&mut work.stopped.0).poll(cx).is_ready() {
+            Some(Err(CallError::Cancelled))
+        } else if let Poll::Ready(outcome) = work.task.as_mut().poll(cx) {
+            Some(
+                match (work.data.stopped(), outcome.and_then(|inner| inner)) {
+                    // Completed in the turn its generation ended: discarded.
+                    (Some(end), _) => Err(ended(end)),
+                    (None, Ok(answer)) => answer.map_err(CallError::Guest),
+                    (None, Err(trap)) => {
+                        let error = CallError::Trap(format!("{trap:#}"));
+                        let report = lock(health).clone();
+                        if let Some(report) = report {
+                            report(&work.component, &work.data, Health::Crashed(error.clone()));
+                        }
+                        Err(error)
+                    }
+                },
+            )
+        } else {
+            None
+        };
+        match answer {
+            Some(answer) => {
+                // Its instance goes with its task, and the helpers it ran.
+                let work = background.swap_remove(index);
+                let _ = work.reply.send(answer);
+            }
+            None => index += 1,
+        }
     }
 }
 
@@ -2844,6 +3110,125 @@ mod tests {
         );
         assert!(block_on(runtime.view_event(new, ViewEvent::Key(Key::Up))).is_ok());
         assert_eq!(block_on(runtime.view_count()), 1);
+    }
+
+    /// Waits, briefly, until `saved` holds.
+    fn until(what: &str, saved: impl Fn() -> bool) {
+        let started = std::time::Instant::now();
+        while !saved() {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(8),
+                "{what} did not happen"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// Background work waits beside the calls the runtime serves: a call
+    /// asked for while a scheduled task waits is answered at once, in the
+    /// command's own instance. Disabling the package stops the task where
+    /// it waits, with its instance, and it answers so.
+    #[test]
+    fn a_waiting_task_holds_no_call_back_and_stops_with_its_generation() {
+        use crate::extension_data::DataKind;
+        use std::time::{Duration, Instant};
+
+        let data = tempfile::tempdir().unwrap();
+        let packages = ExtensionData::open(data.path());
+        let identity = PackageIdentity::local(data.path()).unwrap();
+        let owned = packages.owned_by(&identity);
+        owned.set(DataKind::Settings, "tick-mode", "wait").unwrap();
+        let component = guest("sample_background.wasm");
+        let runtime = Runtime::start().unwrap();
+        let (_stop, run) = runtime.run_task_with(&component, "ticks", owned.clone());
+        let noted = || {
+            packages
+                .owned_by(&identity)
+                .get(DataKind::Content, "tick-wait")
+                .unwrap()
+        };
+        until("the run's start", || noted().as_deref() == Some("started"));
+        assert_eq!(
+            block_on(runtime.background_running()),
+            vec![component.clone()]
+        );
+
+        let asked = Instant::now();
+        let view = block_on(runtime.get_view_with(&component, Some(owned.clone()))).unwrap();
+        assert!(asked.elapsed() < Duration::from_secs(5), "the call waited");
+        assert_eq!(view.items[0].title, "Ticked 0 times");
+        assert_eq!(block_on(runtime.running()), vec![component.clone()]);
+
+        packages.set_enabled(&identity, false);
+
+        assert_eq!(block_on(run), Err(CallError::Disabled));
+        assert!(asked.elapsed() < Duration::from_secs(5));
+        assert_eq!(
+            block_on(runtime.background_running()),
+            Vec::<PathBuf>::new()
+        );
+        packages.set_enabled(&identity, true);
+        let owned = packages.owned_by(&identity);
+        assert_eq!(noted().as_deref(), Some("started"), "{:?}", noted());
+        assert_eq!(owned.get(DataKind::Content, "ticks").unwrap(), None);
+    }
+
+    /// A task answers what it answered, an error as the guest's error; one
+    /// stopped by whoever started it answers that it was cancelled; one that
+    /// traps is a crash of its package, which the health report is told of.
+    #[test]
+    fn a_task_answers_fails_crashes_or_is_stopped() {
+        use crate::extension_data::DataKind;
+
+        let data = tempfile::tempdir().unwrap();
+        let packages = ExtensionData::open(data.path());
+        let identity = PackageIdentity::local(data.path()).unwrap();
+        let owned = packages.owned_by(&identity);
+        let component = guest("sample_background.wasm");
+        let runtime = Runtime::start().unwrap();
+        let crashes = Arc::new(Mutex::new(Vec::new()));
+        let told = crashes.clone();
+        runtime.set_health(Arc::new(move |component, _, health| {
+            lock(&told).push((component.to_path_buf(), health));
+        }));
+        let run = |owned: &PackageData| {
+            let (_stop, answer) = runtime.run_task_with(&component, "ticks", owned.clone());
+            block_on(answer)
+        };
+
+        assert_eq!(run(&owned), Ok("Ticked 1 times".into()));
+        assert_eq!(run(&owned), Ok("Ticked 2 times".into()));
+        owned.set(DataKind::Settings, "tick-mode", "fail").unwrap();
+        assert_eq!(
+            run(&owned),
+            Err(CallError::Guest(
+                "Ticks refuses to count, to show how a failed run looks".into()
+            ))
+        );
+        assert!(lock(&crashes).is_empty(), "an error is no crash");
+        owned.set(DataKind::Settings, "tick-mode", "crash").unwrap();
+        assert!(matches!(run(&owned), Err(CallError::Trap(_))));
+        assert!(matches!(
+            lock(&crashes).as_slice(),
+            [(crashed, Health::Crashed(CallError::Trap(_)))] if *crashed == component
+        ));
+
+        owned.set(DataKind::Settings, "tick-mode", "wait").unwrap();
+        let (stop, answer) = runtime.run_task_with(&component, "ticks", owned.clone());
+        until("the run's start", || {
+            owned
+                .get(DataKind::Content, "tick-wait")
+                .unwrap()
+                .as_deref()
+                == Some("started")
+        });
+        drop(stop);
+        assert_eq!(block_on(answer), Err(CallError::Cancelled));
+        assert_eq!(
+            block_on(runtime.background_running()),
+            Vec::<PathBuf>::new()
+        );
+        assert_eq!(lock(&crashes).len(), 1, "a stopped run is no crash");
     }
 
     /// A call of an ended generation served after the package's next

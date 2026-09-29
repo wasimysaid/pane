@@ -1,0 +1,15 @@
+{
+  "manifestVersion": 1,
+  "title": "Background sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "ticks",
+      "title": "Ticks",
+      "subtitle": "Counts in the background every minute once its schedule is on",
+      "component": "sample_background.wasm",
+      "schedule": { "everyMinutes": 1 }
+    }
+  ]
+}

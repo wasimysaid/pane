@@ -1386,4 +1386,82 @@ try {
 } finally {
     if (-not $service.HasExited) { Stop-Process -Id $service.Id }
 }
+
+# Scheduled tasks (#47): the background sample's Ticks declares a schedule
+# (every minute). Installing it schedules nothing; its row in Manage
+# extensions turns the schedule on, which runs the task at once in the
+# background: the row shows its answer, and the count it keeps is 1. A run
+# that waits (the sample's "Wait 10 seconds in each run") is stopped by
+# disabling the package where it waits: it never notes "finished", and,
+# enabled again, the row says why the run stopped, without running it again.
+# Turned off, the row is off again, and the record forgets it. A data folder
+# of its own keeps the rows in a known order: the package's four rows, then
+# Schedule: Ticks.
+$data = Join-Path $OutDir "schedule-data"
+if (Test-Path $data) { Remove-Item -Recurse -Force $data }
+$env:PANE_DATA_DIR = $data
+# The value the background sample keeps under $key in its content.
+function Kept($key) {
+    $file = Join-Path $data "extensions/content.json"
+    if (-not (Test-Path $file)) { return "none" }
+    $content = Get-Content -Raw $file | ConvertFrom-Json
+    foreach ($package in $content.packages.PSObject.Properties) {
+        $value = $package.Value.PSObject.Properties[$key]
+        if ($value) { return $value.Value }
+    }
+    "none"
+}
+$schedules = Join-Path $data "extensions/schedules.json"
+$process = Start-Pane "stderr-schedule.log" @("--install", "target/guests/packages/sample-background")
+Send "{ENTER}"; Start-Sleep -Seconds 2   # Install; Ticks is selected
+Capture "320-schedule-installed.png"
+Check "320-schedule-installed.png" "9fd8a8"   # "Installed Background sample ..."
+if ((Kept "ticks") -ne "none") { throw "installing ran the scheduled task" }
+Send "manage"; Start-Sleep -Seconds 1
+Send "{ENTER}"; Start-Sleep -Seconds 1   # Manage extensions
+Send "{DOWN 4}"; Start-Sleep -Seconds 1   # Schedule: Ticks
+Capture "321-schedule-off.png"   # "Off · Run it in the background every minute"
+Check "321-schedule-off.png" "364355" 3000
+Send "{ENTER}"; Start-Sleep -Seconds 3   # on: it runs at once
+Capture "322-schedule-on.png"   # "On · Every minute · Last run: Ticked 1 times"
+Check "322-schedule-on.png" "9fd8a8"   # "Ticks runs every minute in the background from now on"
+if ((Kept "ticks") -ne "1") { throw "turning the schedule on did not run it once" }
+if (-not (Select-String -Quiet -SimpleMatch '"outcome": "answered"' $schedules)) { throw "the run's answer was not recorded" }
+Send "{ESC}"; Start-Sleep -Seconds 1   # root search
+Send "ticks"; Start-Sleep -Seconds 1
+Send "{ENTER}"; Start-Sleep -Seconds 2   # open Ticks: "Ticked 1 times" first
+Send "{DOWN 4}"   # Wait 10 seconds in each run
+Send "{ENTER}"; Start-Sleep -Seconds 2
+Capture "323-schedule-wait-chosen.png"
+Check "323-schedule-wait-chosen.png" "9fd8a8"   # "The next runs wait 10 seconds, then count"
+Send "{ESC}"; Start-Sleep -Seconds 1   # root search
+Send "manage"; Start-Sleep -Seconds 1
+Send "{ENTER}"; Start-Sleep -Seconds 1   # Manage extensions
+Send "{DOWN 4}"   # Schedule: Ticks
+Send "{ENTER}"; Start-Sleep -Seconds 2   # off
+Send "{ENTER}"; Start-Sleep -Seconds 2   # on again: a run starts at once, and waits
+Capture "324-schedule-running.png"   # "On · Every minute · Running now"
+Check "324-schedule-running.png" "9fd8a8"   # "Ticks runs every minute in the background from now on"
+if ((Kept "tick-wait") -ne "started") { throw "the waiting run did not start" }
+Send "{UP 4}"   # Background sample
+Send "{ENTER}"; Start-Sleep -Seconds 2   # disable it while its run waits
+Capture "325-schedule-disabled.png"
+Check "325-schedule-disabled.png" "9fd8a8"   # "Disabled Background sample"
+Start-Sleep -Seconds 10   # longer than the run would have waited
+if ((Kept "tick-wait") -ne "started") { throw "the stopped run went on" }
+if ((Kept "ticks") -ne "1") { throw "the stopped run counted" }
+Send "{ENTER}"; Start-Sleep -Seconds 2   # enable it again
+Send "{DOWN 4}"; Start-Sleep -Seconds 1   # Schedule: Ticks
+Capture "326-schedule-stopped.png"   # "On · Every minute · Last run stopped: Background sample was disabled"
+Check "326-schedule-stopped.png" "364355" 3000
+if ((Kept "tick-wait") -ne "started") { throw "enabling ran the stopped run again" }
+Send "{ENTER}"; Start-Sleep -Seconds 2   # off
+Capture "327-schedule-turned-off.png"
+Check "327-schedule-turned-off.png" "9fd8a8"   # "Ticks no longer runs on a schedule"
+$shots = "321-schedule-off", "322-schedule-on", "323-schedule-wait-chosen", "324-schedule-running", "325-schedule-disabled", "326-schedule-stopped", "327-schedule-turned-off" | ForEach-Object { Join-Path $OutDir "$_.png" }
+python "$PSScriptRoot/check_screenshot.py" --distinct @shots
+if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the schedule changed nothing" }
+Stop-Pane $process
+if (-not (Select-String -Quiet -SimpleMatch '"tasks": {}' $schedules)) { throw "the schedule turned off is still recorded" }
+
 Write-Output "screenshots in $OutDir"

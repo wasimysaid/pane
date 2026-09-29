@@ -1,0 +1,41 @@
+package pane:extension@0.1.0;
+
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// Background work: a command's scheduled task, which Pane runs every so
+// often in the background once the user turns its schedule on in Manage
+// extensions. Kept apart from extension.wit so a command without one is
+// unchanged: only a command whose `pane.json` entry declares a `schedule`
+// (`"schedule": { "everyMinutes": 15 }`) exports this interface, beside
+// `command`. Rust commands export it through pane-guest
+// (`pane_guest::scheduled::export!`), JS/TS commands by exporting
+// `scheduledTask` with `"scheduledTask": true` in their package.json's
+// `"pane"` options.
+// The header follows `package`: comments above it would document the package,
+// which extension.wit already does.
+
+interface scheduled-task {
+  /// Runs the scheduled task of the command `command` (its id in
+  /// `pane.json`, so one component can serve several commands) once. The
+  /// returned text is shown in Manage extensions as the task's latest
+  /// result; an error is shown as its latest failure, and is an ordinary
+  /// outcome, never a crash: the schedule goes on.
+  ///
+  /// Pane runs it in the background, in an instance of its own started for
+  /// this run and dropped after it, so nothing kept in memory survives
+  /// between runs: keep what the next run needs in extension data. It runs
+  /// no more than once at a time. It is stopped where it waits (and code
+  /// after that `await` never runs) when the package is disabled, reloaded,
+  /// updated, paused or uninstalled, or the user turns its schedule off.
+  /// Wait on async imports (a clock, a web request) rather than computing
+  /// for long without yielding: Pane serves every extension's calls on one
+  /// thread, which a task that never yields holds. A task cannot call
+  /// other packages' operations yet: such a call is refused.
+  run-task: async func(command: string) -> result<string, string>;
+}
+
+/// The scheduled task export alone: a command component with a schedule
+/// exports it besides the `extension` world's `command`.
+world scheduled-task-provider {
+  export scheduled-task;
+}

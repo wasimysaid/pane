@@ -27,6 +27,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 mod aliases;
+mod background;
 mod choices;
 mod command_search;
 mod hotkeys;
@@ -62,14 +63,18 @@ mod pausing;
 mod recovery;
 mod reload;
 mod retained;
+mod scheduled;
 mod uninstall;
 
 use aliases::AliasChoices;
+use background::Background;
+pub use background::BackgroundChanges;
 use choices::Record;
 use developing::Developing;
 pub use developing::{BuildFailure, Development};
 use hotkeys::Bindings;
 use pausing::{Pauses, Recorder};
+pub use scheduled::{ScheduledTask, TaskOutcome};
 
 /// The id of the root row that installs a package from a local folder.
 const INSTALL_FROM_FOLDER: &str = "pane.install-from-folder";
@@ -435,6 +440,9 @@ pub struct Launcher {
     /// as after a runtime crash; given with development
     /// ([`Launcher::with_development`]).
     changes: Option<ChangeSender>,
+    /// Runs the installed packages' background work, once made to
+    /// ([`Launcher::with_background`]).
+    background: Option<Arc<Background>>,
     state: Arc<Mutex<State>>,
 }
 
@@ -449,6 +457,7 @@ struct WeakLauncher {
     sources: install::Sources,
     developing: std::sync::Weak<Developing>,
     changes: Option<ChangeSender>,
+    background: Option<std::sync::Weak<Background>>,
     state: std::sync::Weak<Mutex<State>>,
 }
 
@@ -468,6 +477,10 @@ impl WeakLauncher {
             sources: self.sources.clone(),
             developing: self.developing.upgrade()?,
             changes: self.changes.clone(),
+            background: match &self.background {
+                Some(background) => Some(background.upgrade()?),
+                None => None,
+            },
             state: self.state.upgrade()?,
         })
     }
@@ -540,6 +553,11 @@ struct State {
     bindings: Bindings,
     /// The aliases and fallbacks the user gave commands.
     aliases: Record<AliasChoices>,
+    /// The scheduled tasks the user turned on, and their runs.
+    tasks: scheduled::Tasks,
+    /// Wakes the background work's driver when a change to a package ends
+    /// ([`State::release`]); none until the launcher runs background work.
+    background: Option<std::sync::Weak<Background>>,
     /// The query root search showed when the status line began showing a
     /// command's answer to a query sent from it (or its sending), so that
     /// changing the query clears it.
@@ -649,6 +667,11 @@ impl State {
     /// `identity` has ended.
     fn release(&mut self, identity: &PackageIdentity) {
         self.changing.remove(identity);
+        // Its background work may run again (see `background`).
+        if let Some(background) = self.background.as_ref().and_then(std::sync::Weak::upgrade) {
+            background.wake();
+            background.changed();
+        }
     }
 
     /// Notes that the user left the screen on display: replies for it are
@@ -852,6 +875,9 @@ enum Entry {
     /// Forget the alias and fallback of the command with this id, which
     /// cannot be listed (extension list).
     ForgetChoices(String),
+    /// Turn the schedule of the scheduled task of the command with this id
+    /// on, or off (extension list).
+    ToggleTask(String),
     /// Ask whether to uninstall this installed package, and whether to keep
     /// its saved data (extension list).
     AskUninstall(PackageIdentity),
@@ -980,6 +1006,12 @@ impl Launcher {
             paused: Pauses::default(),
             bindings,
             aliases,
+            tasks: installation
+                .as_ref()
+                .map_or_else(scheduled::Tasks::default, |installation| {
+                    scheduled::Tasks::open(&installation.dir)
+                }),
+            background: None,
             sent_from: None,
         };
         if let (Some(installation), Some(files)) = (&installation, &state.files) {
@@ -1016,6 +1048,7 @@ impl Launcher {
             sources,
             developing: Arc::new(Developing::new(None, None)),
             changes: None,
+            background: None,
             state: Arc::new(Mutex::new(state)),
         };
         if let (Ok(runtime), Some(installation)) = (&launcher.runtime, &launcher.installation) {
@@ -1099,6 +1132,7 @@ impl Launcher {
             sources: self.sources.clone(),
             developing: Arc::downgrade(&self.developing),
             changes: self.changes.clone(),
+            background: self.background.as_ref().map(Arc::downgrade),
             state: Arc::downgrade(&self.state),
         }
     }
@@ -1561,6 +1595,7 @@ impl Launcher {
         let mut reload = None;
         let mut hotkey_change = None;
         let mut choice_change = None;
+        let mut task_switch = None;
         let mut uninstall = None;
         let mut develop = None;
         let mut delete_retained = None;
@@ -1698,6 +1733,10 @@ impl Launcher {
                 choice_change = Some(self.forget_choices(&mut state, &command));
                 None
             }
+            Some(Entry::ToggleTask(command)) => {
+                task_switch = self.toggle_task(&mut state, &command);
+                None
+            }
             Some(Entry::Toggle(identity)) => {
                 // The package's state when the user pressed, not when the
                 // future runs.
@@ -1770,6 +1809,9 @@ impl Launcher {
             if let Some(choice_change) = choice_change {
                 launcher.finish_choice_change(choice_change).await;
             }
+            if let Some(task_switch) = task_switch {
+                launcher.finish_task_switch(task_switch).await;
+            }
             if let Some(uninstall) = uninstall {
                 launcher.finish_uninstall(epoch, uninstall).await;
             }
@@ -1833,6 +1875,7 @@ impl Launcher {
                     | Entry::AskAlias(_)
                     | Entry::ToggleFallback(_)
                     | Entry::ForgetChoices(_)
+                    | Entry::ToggleTask(_)
                     | Entry::AskUninstall(_)
                     | Entry::Uninstall(..)
                     | Entry::UninstallAll(..)
@@ -2718,7 +2761,11 @@ impl Launcher {
             extension_rows(&state.packages, &state.paused, developed);
         rows.extend(package_rows);
         entries.extend(package_entries);
-        for (row, entry) in self.network_rows(state) {
+        for (row, entry) in self
+            .network_rows(state)
+            .into_iter()
+            .chain(self.schedule_rows(state))
+        {
             rows.push(row);
             entries.push(entry);
         }

@@ -10,7 +10,7 @@
 //   whole form;
 // - from every other handler that answers with an error (`getView`,
 //   `runAction`, `openView`, a custom view's `handleEvent`, `resultsFor`,
-//   `results`, `runOperation`, `runQuery`), the message of an `Error` or of an object
+//   `results`, `runOperation`, `runQuery`, `search`, `runTask`), the message of an `Error` or of an object
 //   with a `message`, or the text of anything else.
 //
 // A crash is then only what a crash should be: resolving with a value of

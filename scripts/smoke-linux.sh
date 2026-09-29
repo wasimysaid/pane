@@ -1386,4 +1386,81 @@ check 169-back-online.png 364355 3000
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{161-root-typed,162-command-opened,163-service-set,164-search-results,165-details,166-newer-search,167-service-error,168-offline,169-back-online}.png
 stop_pane
 stop_service
+
+# Scheduled tasks (#47): the background sample's Ticks declares a schedule
+# (every minute). Installing it schedules nothing; its row in Manage
+# extensions turns the schedule on, which runs the task at once in the
+# background: the row shows its answer, and the count it keeps is 1. A run
+# that waits (the sample's "Wait 10 seconds in each run") is stopped by
+# disabling the package where it waits: it never notes "finished", and,
+# enabled again, the row says why the run stopped, without running it again.
+# Turned off, the row is off again, and the record forgets it. A data folder
+# of its own keeps the rows in a known order: the package's four rows, then
+# Schedule: Ticks.
+export PANE_DATA_DIR=$out/schedule-data
+rm -rf "$PANE_DATA_DIR"
+# The value the background sample keeps under $1 in its content.
+kept() {
+  python3 - "$PANE_DATA_DIR/extensions/content.json" "$1" <<'PY'
+import json, sys
+try:
+    packages = json.load(open(sys.argv[1], encoding="utf-8"))["packages"]
+except FileNotFoundError:
+    packages = {}
+print(next((values[sys.argv[2]] for values in packages.values() if sys.argv[2] in values), "none"))
+PY
+}
+start_pane --install target/guests/packages/sample-background
+"$xdotool" windowfocus --sync "$window"
+"$xdotool" key Return; sleep 2   # Install; Ticks is selected
+capture 320-schedule-installed.png
+check 320-schedule-installed.png 9fd8a8   # "Installed Background sample ..."
+[ "$(kept ticks)" = none ] || { echo "installing ran the scheduled task"; exit 1; }
+"$xdotool" type --delay 50 manage; sleep 1
+"$xdotool" key Return; sleep 1   # Manage extensions
+for ((i = 0; i < 4; i++)); do "$xdotool" key Down; done   # Schedule: Ticks
+sleep 1
+capture 321-schedule-off.png   # "Off · Run it in the background every minute"
+check 321-schedule-off.png 364355 3000
+"$xdotool" key Return; sleep 3   # on: it runs at once
+capture 322-schedule-on.png   # "On · Every minute · Last run: Ticked 1 times"
+check 322-schedule-on.png 9fd8a8   # "Ticks runs every minute in the background from now on"
+[ "$(kept ticks)" = 1 ] || { echo "turning the schedule on did not run it once"; exit 1; }
+grep -q '"outcome": "answered"' "$PANE_DATA_DIR/extensions/schedules.json" || { echo "the run's answer was not recorded"; exit 1; }
+"$xdotool" key Escape; sleep 1   # root search
+"$xdotool" type --delay 50 ticks; sleep 1
+"$xdotool" key Return; sleep 2   # open Ticks: "Ticked 1 times" first
+for ((i = 0; i < 4; i++)); do "$xdotool" key Down; done   # Wait 10 seconds in each run
+"$xdotool" key Return; sleep 2
+capture 323-schedule-wait-chosen.png
+check 323-schedule-wait-chosen.png 9fd8a8   # "The next runs wait 10 seconds, then count"
+"$xdotool" key Escape; sleep 1   # root search
+"$xdotool" type --delay 50 manage; sleep 1
+"$xdotool" key Return; sleep 1   # Manage extensions
+for ((i = 0; i < 4; i++)); do "$xdotool" key Down; done   # Schedule: Ticks
+"$xdotool" key Return; sleep 2   # off
+"$xdotool" key Return; sleep 2   # on again: a run starts at once, and waits
+capture 324-schedule-running.png   # "On · Every minute · Running now"
+check 324-schedule-running.png 9fd8a8   # "Ticks runs every minute in the background from now on"
+[ "$(kept tick-wait)" = started ] || { echo "the waiting run did not start"; exit 1; }
+for ((i = 0; i < 4; i++)); do "$xdotool" key Up; done   # Background sample
+"$xdotool" key Return; sleep 2   # disable it while its run waits
+capture 325-schedule-disabled.png
+check 325-schedule-disabled.png 9fd8a8   # "Disabled Background sample"
+sleep 10   # longer than the run would have waited
+[ "$(kept tick-wait)" = started ] || { echo "the stopped run went on"; exit 1; }
+[ "$(kept ticks)" = 1 ] || { echo "the stopped run counted"; exit 1; }
+"$xdotool" key Return; sleep 2   # enable it again
+for ((i = 0; i < 4; i++)); do "$xdotool" key Down; done   # Schedule: Ticks
+sleep 1
+capture 326-schedule-stopped.png   # "On · Every minute · Last run stopped: Background sample was disabled"
+check 326-schedule-stopped.png 364355 3000
+[ "$(kept tick-wait)" = started ] || { echo "enabling ran the stopped run again"; exit 1; }
+"$xdotool" key Return; sleep 2   # off
+capture 327-schedule-turned-off.png
+check 327-schedule-turned-off.png 9fd8a8   # "Ticks no longer runs on a schedule"
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{321-schedule-off,322-schedule-on,323-schedule-wait-chosen,324-schedule-running,325-schedule-disabled,326-schedule-stopped,327-schedule-turned-off}.png
+stop_pane
+grep -q '"tasks": {}' "$PANE_DATA_DIR/extensions/schedules.json" || { echo "the schedule turned off is still recorded"; exit 1; }
+
 echo "screenshots in $out"

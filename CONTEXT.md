@@ -184,6 +184,14 @@ _Avoid_: Extension crash, paused runtime
 One run of an installed package's code, from when it is installed, enabled or Pane starts until it is disabled, paused or its code is replaced by a reload or an update. Every call into the package belongs to the generation current when it was asked for, and is stopped when that generation ends; its late result is discarded.
 _Avoid_: Version (a package's version is its manifest's), session, instance (one generation can start several), screen or search epoch (the launcher's counters of screens and searches, which decide whether an answer is shown; a search also cancels its own pending calls for computed results)
 
+**Background work**:
+Extension code Pane runs without the user opening anything, in an instance of its own beside the package's calls: it belongs to its package's generation, stops when that generation ends (its late result discarded) and holds back no call while it waits.
+_Avoid_: Daemon, worker (a JavaScript worker is the Node helper's), background call
+
+**Scheduled task**:
+A command's background work its package manifest declares with a schedule (every so many minutes, from 1 to 1440): Pane runs it only after the user turns its schedule on in Manage extensions, at once and then once per interval while the package may run, one run at a time, and shows its latest result there; what fell due while it could not run runs once.
+_Avoid_: Cron job, timer, periodic command
+
 **Supported platforms**:
 The operating systems a package, a command or an action declares it works on: a plain list, not a rule language. A declaration is not evidence of native support.
 _Avoid_: Compatibility rules, target matrix

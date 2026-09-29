@@ -416,3 +416,34 @@ export interface PublishedOperations {
    */
   runOperation(operation: string, input: string): Promise<string>;
 }
+
+/**
+ * A command's scheduled task (`pane:extension/scheduled-task` in
+ * wit/background.wit), which Pane runs in the background every so often
+ * once the user turns the command's schedule on in Manage extensions. A
+ * command with one declares `"schedule": { "everyMinutes": 15 }` on its
+ * entry in `pane.json`, and sets `"pane": { "scheduledTask": true }` in its
+ * `package.json` so that it is built with the interface; its module exports
+ * it as `scheduledTask`:
+ *
+ * ```ts
+ * export const scheduledTask: ScheduledTask = {
+ *   async runTask(command) { return "Done"; },
+ * };
+ * ```
+ */
+export interface ScheduledTask {
+  /**
+   * Runs the task of the command with id `command` (its id in `pane.json`)
+   * once. The text it resolves with is shown in Manage extensions as the
+   * task's latest result; throwing shows the error as its latest failure,
+   * and the schedule goes on. Each run starts in an instance of its own,
+   * so module state does not survive between runs: keep what the next run
+   * needs in extension data. Pane stops a run where it awaits when the
+   * package is disabled, reloaded, updated, paused or uninstalled, or the
+   * schedule is turned off. Await (a clock, a web request) rather than
+   * computing for long without yielding: every extension's calls are served
+   * on one thread. Calling other packages' operations is refused here.
+   */
+  runTask(command: string): Promise<string>;
+}

@@ -91,6 +91,9 @@ fn main() {
             .join("../../tools/componentize-js/pane_js.py");
         let toolchains = Toolchains::from_env(Some(default_js));
         let launcher = launcher.with_development(Arc::new(toolchains), change_sender);
+        // Scheduled tasks the user turned on run in the background, on the
+        // system's clock; after development, so the window redraws for them.
+        let launcher = launcher.with_background(Arc::new(pane_core::clock::SystemClock));
         let bounds = Bounds::centered(None, size(px(640.), px(420.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),

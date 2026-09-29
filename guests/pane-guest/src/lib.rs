@@ -233,6 +233,31 @@ pub mod search {
     pub use exports::pane::extension::command_search::{Guest, SearchResult};
 }
 
+/// A command's scheduled task (`pane:extension/scheduled-task`), which Pane
+/// runs in the background every so often once the user turns the command's
+/// schedule on in Manage extensions. A command whose `pane.json` entry
+/// declares a `schedule` (`"schedule": { "everyMinutes": 15 }`) implements
+/// [`scheduled::Guest`] too and calls
+/// [`scheduled::export!`](crate::scheduled::export) beside [`export!`]:
+///
+/// ```ignore
+/// pane_guest::export!(Ticks);
+/// pane_guest::scheduled::export!(Ticks);
+/// ```
+///
+/// Each run starts in an instance of its own, so keep what the next run
+/// needs in extension data, not in memory.
+pub mod scheduled {
+    wit_bindgen::generate!({
+        path: "../../wit",
+        world: "scheduled-task-provider",
+        pub_export_macro: true,
+        default_bindings_module: "pane_guest::scheduled",
+    });
+
+    pub use exports::pane::extension::scheduled_task::Guest;
+}
+
 pub mod http;
 
 /// The custom view type of a command that has none: `type CustomView =

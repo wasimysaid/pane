@@ -1,0 +1,15 @@
+{
+  "manifestVersion": 1,
+  "title": "JavaScript background sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "ticks",
+      "title": "Ticks",
+      "subtitle": "A JavaScript command that counts in the background every minute once its schedule is on",
+      "component": "sample_background_js.wasm",
+      "schedule": { "everyMinutes": 1 }
+    }
+  ]
+}

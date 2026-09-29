@@ -133,8 +133,13 @@ resume in the store. So:
   end with the call that started them. Processes a helper starts itself are
   not stopped. Nothing in this model assumes one operating system: it lives
   in the runtime and the launcher, with no platform adapter.
-- **Background work** (timers, subscriptions, services) is not part of the
-  extension API yet; when it is, it belongs to a generation the same way.
+- **Background work** belongs to a generation the same way, since
+  [#47](background.md): a [scheduled task](background.md)'s run is started
+  in an instance of its own for the generation current when it falls due,
+  is stopped with its instance when that generation ends (or the user turns
+  its schedule off), and its answer is then discarded;
+  `Runtime::background_running` lists the runs in progress, which is how
+  the tests see that none survives a disable or reload.
 - Measured cleanup is what the runtime reports (`Runtime::running`,
   `Runtime::view_count`); memory returned to the operating system after a
   dropped store is not measured.
