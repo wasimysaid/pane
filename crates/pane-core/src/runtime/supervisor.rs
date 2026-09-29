@@ -36,8 +36,8 @@ use super::faults::Fault;
 use super::faults::Faults;
 
 use super::{
-    CallError, Code, HealthReport, Host, Request, SharedApplications, SharedDirectory, lock,
-    unavailable,
+    CallError, Code, HealthReport, Host, Request, SharedApplications, SharedClipboard,
+    SharedDirectory, lock, unavailable,
 };
 use crate::helpers::runner::Helpers;
 
@@ -82,6 +82,7 @@ pub(super) struct Shared {
     pub(super) helpers: Helpers,
     pub(super) applications: SharedApplications,
     pub(super) files: crate::files::FileAccess,
+    pub(super) clipboard: SharedClipboard,
     pub(super) directory: SharedDirectory,
     pub(super) health: Arc<Mutex<Option<HealthReport>>>,
     /// Custom view ids, never reused, even by a restarted thread: a view
@@ -167,6 +168,7 @@ impl Shared {
             helpers,
             applications,
             files: crate::files::FileAccess::default(),
+            clipboard: SharedClipboard::default(),
             directory: SharedDirectory::default(),
             health: Arc::default(),
             next_view: Arc::default(),

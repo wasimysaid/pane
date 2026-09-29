@@ -262,7 +262,9 @@ impl Launcher {
             .map(|removed| {
                 let identity = &removed.package.identity;
                 let retain = (saved == SavedData::Keep
-                    && (keeps(DataKind::Settings, identity) || keeps(DataKind::Content, identity)))
+                    && DataKind::SAVED
+                        .into_iter()
+                        .any(|kind| keeps(kind, identity)))
                 .then(|| removed.package.title());
                 (identity.clone(), retain)
             })
@@ -419,12 +421,11 @@ impl Launcher {
     }
 }
 
-/// "Saved data: …": how many settings and content records the package with
-/// `identity` keeps, the data the user chooses to keep or delete.
+/// "Saved data: …": how many settings, content records and clipboard
+/// history items the package with `identity` keeps, the data the user
+/// chooses to keep or delete.
 fn saved_data(data: &ExtensionData, identity: &PackageIdentity) -> String {
-    let kept = data
-        .kept_now(&[DataKind::Settings, DataKind::Content])
-        .describe(identity);
+    let kept = data.kept_now(&DataKind::SAVED).describe(identity);
     format!("Saved data: {}", kept.unwrap_or_else(|| "none".into()))
 }
 

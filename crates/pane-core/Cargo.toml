@@ -39,11 +39,12 @@ tar = { version = "0.4.44", default-features = false }
 sha2 = "0.10"
 
 # Listing the Apps folder and opening a shortcut or packaged app as Explorer
-# does, global hotkeys (`RegisterHotKey`), and the Job Object that stops a
-# development build with every process it started; already in the dependency tree
-# through GPUI CE.
+# does, global hotkeys (`RegisterHotKey`), the Job Object that stops a
+# development build with every process it started, and the clipboard format
+# listener of clipboard history (a message-only window, the clipboard and its
+# global memory); already in the dependency tree through GPUI CE.
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Com", "Win32_System_JobObjects", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_DataExchange", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
 
 # Global hotkeys on X11 (key grabs on the root window); already in the
 # dependency tree through GPUI's X11 platform.

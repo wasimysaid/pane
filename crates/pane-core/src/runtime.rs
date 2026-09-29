@@ -124,12 +124,13 @@ mod operations_bindings {
 
 use bindings::exports::pane::extension::command;
 use bindings::pane::extension::{
-    applications, cache, content, credentials, service_status, settings,
+    applications, cache, clipboard_history, content, credentials, service_status, settings,
 };
 use indexed_bindings::exports::pane::extension::indexed_results;
 use root_bindings::exports::pane::extension::root_results;
 
 use crate::applications::Applications;
+use crate::clipboard::{self, Capture, CaptureState};
 use crate::extension_data::{DataKind, PackageData};
 use crate::files::{FileAccess, Folders};
 use crate::generation::{End, Generation};
@@ -287,6 +288,11 @@ pub(crate) type StatusSink = Arc<dyn Fn(String) + Send + Sync>;
 /// The system's applications as the runtime's guests and the launcher see
 /// them; replaceable, for tests.
 type SharedApplications = Arc<Mutex<Arc<dyn Applications>>>;
+
+/// Where the runtime's guests keep clipboard history, once the launcher
+/// said (see [`Runtime::set_clipboard`]); held weakly, since the launcher
+/// owns it and Pane stops watching the clipboard once it is dropped.
+type SharedClipboard = Arc<Mutex<Option<std::sync::Weak<Capture>>>>;
 
 /// The installed packages as the launcher has them, once it has said, for
 /// resolving operation calls and finding a guest's helpers.
@@ -977,6 +983,13 @@ impl Runtime {
         lock(&self.shared.applications).clone()
     }
 
+    /// Has the runtime's guests keep clipboard history through `capture`
+    /// from now on; until then they are told that this Pane does not watch
+    /// the clipboard.
+    pub(crate) fn set_clipboard(&self, capture: &Arc<Capture>) {
+        *lock(&self.shared.clipboard) = Some(Arc::downgrade(capture));
+    }
+
     /// Asks the command in `component`, which computes root results, for
     /// its results for `query`; the command reads and saves `data`.
     /// Starts its instance if it has none.
@@ -1423,6 +1436,8 @@ pub(crate) struct GuestState {
     limits: StoreLimits,
     /// The granted folders and their listings.
     files: FileAccess,
+    /// Keeps clipboard history for the guest's package.
+    clipboard: SharedClipboard,
     /// The installed packages, for finding the guest's helpers.
     directory: SharedDirectory,
     /// The runtime's helper processes; those of this instance are ended
@@ -1581,6 +1596,88 @@ impl service_status::Host for GuestState {
     }
 }
 
+impl GuestState {
+    /// What the guest's package does with its clipboard history.
+    fn clipboard(&self) -> Result<clipboard::Commands<'_>, String> {
+        let data = self.data.as_ref().ok_or(
+            "only installed packages keep clipboard history; this command is built into Pane",
+        )?;
+        let capture = lock(&self.clipboard)
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade);
+        Ok(clipboard::Commands { data, capture })
+    }
+}
+
+impl From<CaptureState> for clipboard_history::Capture {
+    fn from(state: CaptureState) -> Self {
+        match state {
+            CaptureState::Off => clipboard_history::Capture::Off,
+            CaptureState::On => clipboard_history::Capture::On,
+            CaptureState::Paused => clipboard_history::Capture::Paused,
+        }
+    }
+}
+
+impl From<clipboard_history::Capture> for CaptureState {
+    fn from(capture: clipboard_history::Capture) -> Self {
+        match capture {
+            clipboard_history::Capture::Off => CaptureState::Off,
+            clipboard_history::Capture::On => CaptureState::On,
+            clipboard_history::Capture::Paused => CaptureState::Paused,
+        }
+    }
+}
+
+/// A count for a guest, which cannot exceed `u32` in practice.
+fn count(count: usize) -> u32 {
+    u32::try_from(count).unwrap_or(u32::MAX)
+}
+
+impl clipboard_history::Host for GuestState {
+    fn status(&mut self) -> Result<clipboard_history::HistoryStatus, String> {
+        let status = self.clipboard()?.status()?;
+        Ok(clipboard_history::HistoryStatus {
+            capture: status.capture.into(),
+            problem: status.problem,
+            excluded: status.excluded.into_iter().map(String::from).collect(),
+            items: count(status.items),
+        })
+    }
+
+    fn set_capture(&mut self, wanted: clipboard_history::Capture) -> Result<(), String> {
+        self.clipboard()?.set_capture(wanted.into())
+    }
+
+    fn set_excluded(&mut self, programs: Vec<String>) -> Result<(), String> {
+        self.clipboard()?.set_excluded(&programs)
+    }
+
+    fn entries(&mut self) -> Result<Vec<clipboard_history::Entry>, String> {
+        let now = clipboard::now();
+        Ok(self
+            .clipboard()?
+            .items()?
+            .into_iter()
+            .map(|item| clipboard_history::Entry {
+                id: item.id.to_string(),
+                text: item.text,
+                copied_at: item.copied_at,
+                age_seconds: now.saturating_sub(item.copied_at) / 1000,
+                source: item.source,
+            })
+            .collect())
+    }
+
+    fn copy(&mut self, id: String) -> Result<(), String> {
+        self.clipboard()?.copy(&id)
+    }
+
+    fn clear(&mut self) -> Result<u32, String> {
+        Ok(count(self.clipboard()?.clear()?))
+    }
+}
+
 impl WasiView for GuestState {
     fn ctx(&mut self) -> WasiCtxView<'_> {
         WasiCtxView {
@@ -1694,6 +1791,8 @@ struct Host {
     network: Arc<http::Network>,
     /// The granted folders and their listings.
     files: FileAccess,
+    /// Keeps clipboard history for guests' packages.
+    clipboard: SharedClipboard,
 }
 
 impl Code {
@@ -1725,6 +1824,11 @@ impl Code {
             state
         })
         .expect("registering applications in a fresh linker cannot conflict");
+        clipboard_history::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
+            &mut linker,
+            |state| state,
+        )
+        .expect("registering clipboard history in a fresh linker cannot conflict");
         bindings::pane::extension::helpers::add_to_linker::<_, helpers::Runs>(
             &mut linker,
             |state| state,
@@ -1903,6 +2007,7 @@ impl Host {
             applications: shared.applications.clone(),
             network: shared.network.clone(),
             files: shared.files.clone(),
+            clipboard: shared.clipboard.clone(),
         }
     }
 
@@ -2836,6 +2941,7 @@ impl Host {
                 serving: false,
                 applications: self.applications.clone(),
                 files: self.files.clone(),
+                clipboard: self.clipboard.clone(),
                 directory: self.directory.clone(),
                 owner: self.helpers.new_owner(),
                 helpers: self.helpers.clone(),

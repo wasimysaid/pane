@@ -41,7 +41,7 @@ Extension data the extension can compute or download again, which the user can c
 _Avoid_: Temporary files, managed copy
 
 **Saved data**:
-An extension's settings and content: the extension data a user chooses to keep or delete when uninstalling it. Its cache and local credentials are removed either way.
+An extension's settings and content, and the clipboard history Pane keeps for it: the extension data a user chooses to keep or delete when uninstalling it. Its cache and local credentials are removed either way.
 _Avoid_: All extension data, durable data (in UI text)
 
 **Uninstall**:
@@ -87,6 +87,10 @@ _Avoid_: App (ambiguous with Pane itself), program
 **Quicklink**:
 A named web address the user saves through the Quicklinks default extension's form and finds in root search, where invoking it opens the address with the system's handler for web links; it is kept in that extension's content.
 _Avoid_: Bookmark, shortcut, alias
+
+**Clipboard history**:
+The text a user copies, which Pane keeps on this computer for an installed package once the user turned it on in the package's command, watching the clipboard only while the history is on and the package runs; a copy its application marks as not to be kept (as password managers do), or from a program the user excluded, is not kept. It is that package's extension data of a kind of its own, written by Pane, never sent anywhere; the Clipboard History default extension shows it.
+_Avoid_: Clipboard (the system's current contents, which deleting history never changes), clipboard log, paste history
 
 **Global hotkey**:
 A key combination the user assigns to an installed command in Pane, which opens that command in Pane's window while any application has focus; Pane keeps it as its own record and registers it with the system only while the command's extension is enabled.

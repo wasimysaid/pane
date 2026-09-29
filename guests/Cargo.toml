@@ -11,6 +11,7 @@ members = [
     "applications",
     "quicklinks",
     "files",
+    "clipboard-history",
     "sample-operations",
     "sample-dependencies",
     "sample-query",

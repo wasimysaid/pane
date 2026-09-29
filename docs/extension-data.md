@@ -26,7 +26,15 @@ actions do with a value.
 | Settings | The user's choices for the extension | `settings.json` | kept | the user's choice |
 | Content | The extension's own durable records, such as notes or history | `content.json` | kept | the user's choice |
 | Cache | Values the extension can compute or download again | `cache.json` | removed | removed |
-| Local credentials (`credentials`) | Secrets kept on this computer, such as a sign-in token | `credentials.json`, readable only by the user on macOS and Linux (mode 0600) | kept | removed |
+| Local credentials (`credentials`) | Secrets kept on this computer, such as a sign-in token | `credentials.json`, readable only by the user (mode 0600 on macOS and Linux; on Windows a protected DACL for the user and SYSTEM only) | kept | removed |
+| Clipboard history (`clipboard-history`, since #35) | The text the user copied while the package kept [clipboard history](clipboard-history.md), and whether it keeps it; written by Pane only | `clipboard-history.json`, readable only by the user, as `credentials.json`; typed and versioned, not key-value | kept | the user's choice |
+
+Clipboard history is not a `get`/`set` interface: Pane itself watches the
+clipboard and writes the items for the package, which reads and controls
+them through `pane:extension/clipboard-history`
+([`wit/clipboard.wit`](../wit/clipboard.wit)). It counts as saved data with
+settings and content ("Saved data: 1 setting and 12 clipboard history
+items").
 
 The settings sample in [Rust](../guests/sample-settings/src/lib.rs),
 [JavaScript](../guests/sample-settings-js/src/index.js) and
@@ -111,7 +119,8 @@ first, "Uninstall <title>?", with:
   computer, and the extension does not run. Deleting a credential does not
   sign you out of an online service.";
 - "Saved data: 1 setting and 1 content record" (or "none"): the package's
-  **saved data**, its settings and content, which is what the choice is
+  **saved data**, its settings and content (and its [clipboard
+  history](clipboard-history.md), since #35), which is what the choice is
   about;
 - "Its source folder <path> and files it saved elsewhere are not touched."
 
@@ -309,8 +318,11 @@ The record is dropped only once every kind is deleted:
 - Local credentials are plain text in Pane's data folder, not in the
   system's keychain ([decision](current-decisions.md#cross-cutting-details-preserved)).
   On macOS and Linux `credentials.json` is created with mode 0600, so other
-  users of the computer cannot read it; on Windows it has its folder's
-  permissions (normally the user's own profile). Nothing protects them from
+  users of the computer cannot read it; on Windows (since #35's review) each
+  version of it is created with a protected DACL giving full control to the
+  user Pane runs as and SYSTEM only, inheriting nothing from its folder
+  (`atomic.rs`, checked by a Windows unit test). `clipboard-history.json`
+  is written the same way. Nothing protects them from
   other extensions or programs running as the same user: the policy is
   lifecycle behavior, not secret isolation. Deleting a local credential never
   revokes a remote session.

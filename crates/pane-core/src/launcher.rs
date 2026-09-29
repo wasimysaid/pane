@@ -35,6 +35,7 @@ mod indexed;
 mod network;
 
 use crate::changes::ChangeSender;
+use crate::clipboard::{Capture, ClipboardSystem};
 use crate::dependencies;
 use crate::extension_data::{ExtensionData, PackageData};
 use crate::files::FileAccess;
@@ -434,6 +435,9 @@ pub struct Launcher {
     links: Arc<dyn LinkOpener>,
     /// Registers the global hotkeys the user assigns with the system.
     hotkeys: Arc<dyn Hotkeys>,
+    /// Keeps the clipboard history of the packages that keep one, given
+    /// with the system's clipboard ([`Launcher::with_clipboard`]).
+    clipboard: Option<Arc<Capture>>,
     /// Reads packages from folders and downloads them from npm.
     sources: install::Sources,
     /// The packages being developed: built and reloaded on save.
@@ -456,6 +460,9 @@ struct WeakLauncher {
     installation: Option<Installation>,
     links: Arc<dyn LinkOpener>,
     hotkeys: Arc<dyn Hotkeys>,
+    /// Held weakly, so that Pane stops watching the clipboard as soon as
+    /// the launcher is dropped.
+    clipboard: Option<std::sync::Weak<Capture>>,
     sources: install::Sources,
     developing: std::sync::Weak<Developing>,
     changes: Option<ChangeSender>,
@@ -470,12 +477,17 @@ impl WeakLauncher {
             Ok(runtime) => Ok(runtime.upgrade()?),
             Err(error) => Err(error.clone()),
         };
+        let clipboard = match &self.clipboard {
+            Some(capture) => Some(capture.upgrade()?),
+            None => None,
+        };
         Some(Launcher {
             runtime,
             commands: self.commands.clone(),
             installation: self.installation.clone(),
             links: self.links.clone(),
             hotkeys: self.hotkeys.clone(),
+            clipboard,
             sources: self.sources.clone(),
             developing: self.developing.upgrade()?,
             changes: self.changes.clone(),
@@ -1057,6 +1069,7 @@ impl Launcher {
             installation,
             links: Arc::new(NoOpener),
             hotkeys: system_hotkeys::none(),
+            clipboard: None,
             sources,
             developing: Arc::new(Developing::new(None, None)),
             changes: None,
@@ -1113,6 +1126,30 @@ impl Launcher {
         launcher
     }
 
+    /// This launcher keeping clipboard history for the installed packages
+    /// that ask for it through `clipboard`, normally the system's
+    /// ([`crate::clipboard::native`]): Pane watches the clipboard exactly
+    /// while a package keeps history (the user turned it on, and did not
+    /// pause it, in the package's command) and runs (it is enabled and not
+    /// paused), so a history kept before a restart is kept again now.
+    /// Without it, a package is told that this Pane does not watch the
+    /// clipboard. Only a launcher that installs packages keeps any.
+    pub fn with_clipboard(self, clipboard: Arc<dyn ClipboardSystem>) -> Self {
+        let Some(installation) = &self.installation else {
+            return self;
+        };
+        let capture = Capture::start(clipboard, installation.data.clone());
+        if let Ok(runtime) = &self.runtime {
+            runtime.set_clipboard(&capture);
+        }
+        let launcher = Launcher {
+            clipboard: Some(capture),
+            ..self
+        };
+        launcher.report_failures();
+        launcher
+    }
+
     /// Has the runtime tell this launcher of each failure of an installed
     /// package's code, which may pause the package (see `pausing`). The
     /// runtime holds it weakly: it does not keep this launcher, or itself,
@@ -1141,6 +1178,7 @@ impl Launcher {
             installation: self.installation.clone(),
             links: self.links.clone(),
             hotkeys: self.hotkeys.clone(),
+            clipboard: self.clipboard.as_ref().map(Arc::downgrade),
             sources: self.sources.clone(),
             developing: Arc::downgrade(&self.developing),
             changes: self.changes.clone(),

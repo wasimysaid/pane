@@ -34,6 +34,8 @@ const PREBUILT: &[&str] = &[
     "sample_helper_ts",
     "sample_files_js",
     "sample_files_ts",
+    "sample_clipboard_js",
+    "sample_clipboard_ts",
     "sample_npm_js",
     "sample_background_js",
     "sample_background_ts",
@@ -96,6 +98,7 @@ fn guests() -> Result<(), String> {
                 "applications",
                 "quicklinks",
                 "files",
+                "clipboard_history",
                 "sample_operations",
                 "sample_dependencies",
                 "sample_query",
@@ -251,7 +254,7 @@ fn npm_sample(root: &Path, out: &Path) -> Result<(), String> {
 /// (package folder in `guests/packages`, component) of each sample package,
 /// and of the default extensions (the calculator, applications and
 /// quicklinks).
-const SAMPLE_PACKAGES: [(&str, &str); 34] = [
+const SAMPLE_PACKAGES: [(&str, &str); 37] = [
     ("sample-rust", "sample_rust"),
     ("sample-settings", "sample_settings"),
     ("sample-js", "sample_js"),
@@ -262,6 +265,7 @@ const SAMPLE_PACKAGES: [(&str, &str); 34] = [
     ("applications", "applications"),
     ("quicklinks", "quicklinks"),
     ("files", "files"),
+    ("clipboard-history", "clipboard_history"),
     ("sample-operations", "sample_operations"),
     ("sample-operations-js", "sample_operations_js"),
     ("sample-operations-ts", "sample_operations_ts"),
@@ -280,6 +284,8 @@ const SAMPLE_PACKAGES: [(&str, &str); 34] = [
     ("sample-helper-ts", "sample_helper_ts"),
     ("sample-files-js", "sample_files_js"),
     ("sample-files-ts", "sample_files_ts"),
+    ("sample-clipboard-js", "sample_clipboard_js"),
+    ("sample-clipboard-ts", "sample_clipboard_ts"),
     ("sample-background", "sample_background"),
     ("sample-background-js", "sample_background_js"),
     ("sample-background-ts", "sample_background_ts"),

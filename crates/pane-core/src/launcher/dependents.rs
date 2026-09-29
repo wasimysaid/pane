@@ -189,9 +189,7 @@ impl Launcher {
                 dependent.package.title, dependent.requires.title, dependent.package.identity
             )
         }));
-        let kept = installation
-            .data
-            .kept_now(&[DataKind::Settings, DataKind::Content]);
+        let kept = installation.data.kept_now(&DataKind::SAVED);
         let named = std::iter::once((identity, title.clone())).chain(
             closure
                 .iter()

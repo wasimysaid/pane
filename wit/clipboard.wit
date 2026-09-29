@@ -1,0 +1,91 @@
+package pane:extension@0.1.0;
+
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// Clipboard history, which Pane's host keeps for an extension (a pure WASI
+// guest cannot watch the system's clipboard, and the history must be kept
+// while the extension is not running). Kept apart from the other files so a
+// command that does not use it is unchanged. Rust commands use it through
+// pane-guest (`pane_guest::clipboard_history`), and JavaScript and
+// TypeScript commands whose package.json sets
+// `"pane": { "clipboardHistory": true }` import it
+// (guests/js/clipboard.d.ts).
+// The header follows `package`: comments above it would document the package,
+// which extension.wit already does.
+
+/// The text the user copies, which Pane keeps on this computer for the
+/// calling package once the user turned it on: only while the package runs
+/// (it is enabled and not paused) and the history is not paused. Pane keeps
+/// plain text only, and not what the copying application marked as not to
+/// be kept (as password managers do) or what was copied from a program the
+/// user excluded. Nothing is sent anywhere.
+interface clipboard-history {
+  /// Whether Pane keeps what is copied for this package.
+  enum capture {
+    /// Nothing is kept. Every package starts so.
+    off,
+    /// Text copied is kept.
+    on,
+    /// Turned on, then paused: nothing is kept until it is on again.
+    paused,
+  }
+
+  record history-status {
+    capture: capture,
+    /// Why Pane does not watch the clipboard although it should, or cannot
+    /// on this system; none while all is well.
+    problem: option<string>,
+    /// The programs whose copied text is not kept, as lowercase file names
+    /// such as `keepass.exe`.
+    excluded: list<string>,
+    /// How many items are kept.
+    items: u32,
+  }
+
+  record entry {
+    /// Identifies it to `copy`.
+    id: string,
+    text: string,
+    /// When it was copied, in milliseconds since the Unix epoch.
+    copied-at: u64,
+    /// How long ago it was copied, in seconds.
+    age-seconds: u64,
+    /// The file name of the program it was copied from, such as
+    /// `notepad.exe`, if the system said.
+    source: option<string>,
+  }
+
+  status: func() -> result<history-status, string>;
+
+  /// Turns keeping on or off, or pauses it. Turning it on fails, and changes
+  /// nothing, where Pane cannot watch the clipboard.
+  set-capture: func(capture: capture) -> result<_, string>;
+
+  /// Replaces the excluded programs: file names such as `KeePass.exe`,
+  /// matched ignoring case, with or without their extension.
+  set-excluded: func(programs: list<string>) -> result<_, string>;
+
+  /// The kept items, newest first.
+  entries: func() -> result<list<entry>, string>;
+
+  /// Puts the kept item `id` on the clipboard again.
+  copy: func(id: string) -> result<_, string>;
+
+  /// Deletes every kept item; whether history is kept and the excluded
+  /// programs stay as they are. Returns how many were deleted.
+  clear: func() -> result<u32, string>;
+}
+
+/// The clipboard history import alone, for guest bindings.
+world clipboard-history-user {
+  import clipboard-history;
+}
+
+/// The world Pane hosts: a command that may also use extension data, call
+/// operations, find and open installed applications, run its native
+/// helpers, list the folder granted to its package and keep clipboard
+/// history.
+world extension-with-clipboard {
+  include extension-with-files;
+  import clipboard-history;
+}

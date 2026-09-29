@@ -10,6 +10,7 @@
 /// <reference path="./helpers.d.ts" />
 /// <reference path="./files.d.ts" />
 /// <reference path="./service.d.ts" />
+/// <reference path="./clipboard.d.ts" />
 
 /** One entry in a command's list view. */
 export interface Item {

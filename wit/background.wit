@@ -94,8 +94,8 @@ world service-status-user {
 }
 
 /// Everything Pane's host links for a command: the extension with its data,
-/// helpers and granted folder, and a service's status.
+/// helpers, granted folder and clipboard history, and a service's status.
 world extension-with-services {
-  include extension-with-files;
+  include extension-with-clipboard;
   import service-status;
 }

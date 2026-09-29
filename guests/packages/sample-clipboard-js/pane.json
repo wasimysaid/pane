@@ -1,0 +1,15 @@
+{
+  "manifestVersion": 1,
+  "title": "JavaScript clipboard sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "clipboard-history",
+      "title": "Clipboard history (JavaScript)",
+      "subtitle": "A JavaScript command that lists the text you copy, once you turn it on",
+      "component": "sample_clipboard_js.wasm",
+      "platforms": ["windows"]
+    }
+  ]
+}

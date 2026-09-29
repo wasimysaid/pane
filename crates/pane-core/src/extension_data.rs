@@ -1,6 +1,7 @@
 //! Extension data: the values an installed package's commands save through
 //! Pane, string values by key, of four kinds, each through its own
-//! `pane:extension` interface (`wit/data.wit`).
+//! `pane:extension` interface (`wit/data.wit`), and the package's clipboard
+//! history, which Pane keeps for it (`wit/clipboard.wit`, see `clipboard`).
 //!
 //! | Kind | File | Clear cache | Uninstall | Readable by |
 //! |---|---|---|---|---|
@@ -8,6 +9,7 @@
 //! | Content | `content.json` | kept | the user's choice | default |
 //! | Cache | `cache.json` | removed | removed | default |
 //! | Local credentials | `credentials.json` | kept | removed | the user only (Unix: 0600) |
+//! | Clipboard history | `clipboard-history.json` | kept | the user's choice | the user only (Unix: 0600) |
 //!
 //! Each kind has one file next to `installed.json`, holding every package's
 //! values under the package identity's key, so they belong to the source
@@ -27,6 +29,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::atomic::{Readers, write_atomically};
+use crate::clipboard::history::HistoryStore;
 use crate::generation::{End, Generation};
 use crate::packages::{PackageIdentity, SavedData};
 
@@ -44,14 +47,27 @@ pub(crate) enum DataKind {
     Cache,
     /// Secrets kept on this computer, such as a sign-in token.
     LocalCredentials,
+    /// The text the user copied while the package kept clipboard history,
+    /// and whether it keeps it; written by Pane, never by the package's
+    /// code directly (see `clipboard`).
+    ClipboardHistory,
 }
 
 impl DataKind {
-    pub const ALL: [DataKind; 4] = [
+    pub const ALL: [DataKind; 5] = [
         DataKind::Settings,
         DataKind::Content,
         DataKind::Cache,
         DataKind::LocalCredentials,
+        DataKind::ClipboardHistory,
+    ];
+
+    /// The kinds that are a package's saved data: what the user chooses to
+    /// keep or delete when uninstalling it.
+    pub const SAVED: [DataKind; 3] = [
+        DataKind::Settings,
+        DataKind::Content,
+        DataKind::ClipboardHistory,
     ];
 
     /// All of a package's values of this kind, as people call them.
@@ -61,6 +77,7 @@ impl DataKind {
             DataKind::Content => "its content",
             DataKind::Cache => "its cache",
             DataKind::LocalCredentials => "its credentials",
+            DataKind::ClipboardHistory => "its clipboard history",
         }
     }
 
@@ -70,13 +87,15 @@ impl DataKind {
             DataKind::Content => "content.json",
             DataKind::Cache => "cache.json",
             DataKind::LocalCredentials => "credentials.json",
+            DataKind::ClipboardHistory => "clipboard-history.json",
         }
     }
 
-    /// Who may read this kind's file: local credentials are secrets.
+    /// Who may read this kind's file: local credentials are secrets, and
+    /// copied text may be.
     fn readers(self) -> Readers {
         match self {
-            DataKind::LocalCredentials => Readers::OwnerOnly,
+            DataKind::LocalCredentials | DataKind::ClipboardHistory => Readers::OwnerOnly,
             DataKind::Settings | DataKind::Content | DataKind::Cache => Readers::Default,
         }
     }
@@ -88,6 +107,7 @@ impl DataKind {
             DataKind::Content => "the content",
             DataKind::Cache => "the cache value",
             DataKind::LocalCredentials => "the credential",
+            DataKind::ClipboardHistory => "the clipboard history",
         }
     }
 
@@ -99,6 +119,7 @@ impl DataKind {
             DataKind::Content => ("content record", "content records"),
             DataKind::Cache => ("cache value", "cache values"),
             DataKind::LocalCredentials => ("credential", "credentials"),
+            DataKind::ClipboardHistory => ("clipboard history item", "clipboard history items"),
         }
     }
 
@@ -109,6 +130,7 @@ impl DataKind {
             DataKind::Content => "its content is kept unchanged",
             DataKind::Cache => "its cache is kept unchanged",
             DataKind::LocalCredentials => "its credentials are kept unchanged",
+            DataKind::ClipboardHistory => "its clipboard history is kept unchanged",
         }
     }
 }
@@ -156,7 +178,13 @@ struct DataFile {
     /// launcher keeps it in step with its packages; the runtime reads it
     /// here, on its own thread.
     generations: HashMap<String, Generation>,
+    /// Told after a generation or a clipboard capture state changed, with
+    /// the files unlocked (see `clipboard::Capture`).
+    changed: Option<Changed>,
 }
+
+/// What [`ExtensionData::set_changed`] calls.
+pub(crate) type Changed = Arc<dyn Fn() + Send + Sync>;
 
 impl DataFile {
     fn of(&mut self, kind: DataKind) -> &mut KindFile {
@@ -165,6 +193,10 @@ impl DataFile {
             DataKind::Content => &mut self.content,
             DataKind::Cache => &mut self.cache,
             DataKind::LocalCredentials => &mut self.local_credentials,
+            // Kept by `clipboard::history`, never through a kind's file.
+            DataKind::ClipboardHistory => {
+                unreachable!("clipboard history has a store of its own")
+            }
         }
     }
 }
@@ -172,19 +204,27 @@ impl DataFile {
 /// Every installed package's extension data. Cloning shares the same
 /// files.
 #[derive(Clone)]
-pub(crate) struct ExtensionData(Arc<Mutex<DataFile>>);
+pub(crate) struct ExtensionData {
+    files: Arc<Mutex<DataFile>>,
+    /// The packages' clipboard history, typed and in a file of its own.
+    clipboard: Arc<HistoryStore>,
+}
 
 impl ExtensionData {
     /// Opens the data kept in `dir`. Nothing is written until a command
     /// saves a value.
     pub fn open(dir: &Path) -> ExtensionData {
-        ExtensionData(Arc::new(Mutex::new(DataFile {
-            settings: KindFile::open(dir, DataKind::Settings),
-            content: KindFile::open(dir, DataKind::Content),
-            cache: KindFile::open(dir, DataKind::Cache),
-            local_credentials: KindFile::open(dir, DataKind::LocalCredentials),
-            generations: HashMap::new(),
-        })))
+        ExtensionData {
+            files: Arc::new(Mutex::new(DataFile {
+                settings: KindFile::open(dir, DataKind::Settings),
+                content: KindFile::open(dir, DataKind::Content),
+                cache: KindFile::open(dir, DataKind::Cache),
+                local_credentials: KindFile::open(dir, DataKind::LocalCredentials),
+                generations: HashMap::new(),
+                changed: None,
+            })),
+            clipboard: Arc::new(HistoryStore::open(dir)),
+        }
     }
 
     /// The data of the package with `identity`, as its commands see it,
@@ -219,6 +259,8 @@ impl ExtensionData {
         } else if current.ended().is_some() {
             *current = Generation::new();
         }
+        drop(file);
+        self.changed();
     }
 
     /// Notes that Pane paused the package with `identity` after it failed:
@@ -230,6 +272,7 @@ impl ExtensionData {
             .entry(identity.key())
             .or_insert_with(Generation::new)
             .end(End::Paused);
+        self.changed();
     }
 
     /// Runs the package with `identity` again in a new generation, if Pane
@@ -241,6 +284,8 @@ impl ExtensionData {
         {
             *current = Generation::new();
         }
+        drop(file);
+        self.changed();
     }
 
     /// Notes that the code of the package with `identity` was replaced (a
@@ -261,6 +306,8 @@ impl ExtensionData {
             Some(End::Paused) => *current = Generation::new(),
             Some(_) => {}
         }
+        drop(file);
+        self.changed();
     }
 
     /// Notes that the package with `identity` is being uninstalled: its
@@ -274,6 +321,8 @@ impl ExtensionData {
             .entry(identity.key())
             .or_insert_with(Generation::new);
         end_as(current, End::Uninstalled);
+        drop(file);
+        self.changed();
     }
 
     /// Puts back the package with `identity` after its uninstall could not
@@ -284,6 +333,37 @@ impl ExtensionData {
             generation.end(End::Disabled);
         }
         self.lock().generations.insert(identity.key(), generation);
+        self.changed();
+    }
+
+    /// Has `changed` called after each change of a package's generation or
+    /// clipboard capture state, with the files unlocked.
+    pub fn set_changed(&self, changed: Changed) {
+        self.lock().changed = Some(changed);
+    }
+
+    /// Calls what [`ExtensionData::set_changed`] set, if anything.
+    pub fn changed(&self) {
+        let changed = self.lock().changed.clone();
+        if let Some(changed) = changed {
+            changed();
+        }
+    }
+
+    /// The identity keys whose code may run now: their generation has not
+    /// ended.
+    pub fn running_owners(&self) -> Vec<String> {
+        self.lock()
+            .generations
+            .iter()
+            .filter(|(_, generation)| generation.ended().is_none())
+            .map(|(owner, _)| owner.clone())
+            .collect()
+    }
+
+    /// Every package's clipboard history.
+    pub fn clipboard_history(&self) -> &HistoryStore {
+        &self.clipboard
     }
 
     /// Removes every cache value of the package with `identity`, and nothing
@@ -309,15 +389,16 @@ impl ExtensionData {
     }
 
     /// Removes the data of an uninstalled package with `identity`, without
-    /// running it: its cache and local credentials, and its settings and
-    /// content too when `saved` is [`SavedData::Delete`]. Each kind is
+    /// running it: its cache and local credentials, and its saved data
+    /// (settings, content and clipboard history) too when `saved` is
+    /// [`SavedData::Delete`]. Each kind is
     /// removed on its own, as [`ExtensionData::clear_cache`] removes the
     /// cache. Returns why each kind that could not be removed was not; its
     /// values remain where they were.
     pub fn remove_uninstalled(&self, identity: &PackageIdentity, saved: SavedData) -> Vec<String> {
         let mut kinds = vec![DataKind::Cache, DataKind::LocalCredentials];
         if saved == SavedData::Delete {
-            kinds.extend([DataKind::Settings, DataKind::Content]);
+            kinds.extend(DataKind::SAVED);
         }
         self.remove_kinds(identity, &kinds)
     }
@@ -365,17 +446,22 @@ impl ExtensionData {
     /// repaired or changed by another Pane since is counted as it is. Each
     /// file is read once, however many identities are then described.
     pub fn kept_now(&self, kinds: &[DataKind]) -> Kept {
-        let paths: Vec<(DataKind, PathBuf)> = {
-            let mut store = self.lock();
+        Kept(
             kinds
                 .iter()
-                .map(|&kind| (kind, store.of(kind).path.clone()))
-                .collect()
-        };
-        Kept(
-            paths
-                .into_iter()
-                .map(|(kind, path)| (kind, read(&path)))
+                .map(|&kind| {
+                    if kind == DataKind::ClipboardHistory {
+                        return (kind, self.clipboard.counts_now());
+                    }
+                    let path = self.lock().of(kind).path.clone();
+                    let counts = read(&path).map(|file| {
+                        file.packages
+                            .into_iter()
+                            .map(|(owner, values)| (owner, values.len()))
+                            .collect()
+                    });
+                    (kind, counts)
+                })
                 .collect(),
         )
     }
@@ -383,6 +469,12 @@ impl ExtensionData {
     /// How many values of `kind` the package with `identity` keeps, as Pane
     /// last read or wrote them, or why they cannot be read.
     pub fn count(&self, kind: DataKind, identity: &PackageIdentity) -> Result<usize, String> {
+        if kind == DataKind::ClipboardHistory {
+            // Its items, and its choices as one more.
+            let history = self.clipboard.get(&identity.key())?;
+            let choices = !(history.capture.is_off() && history.excluded.is_empty());
+            return Ok(history.items.len() + usize::from(choices));
+        }
         let mut store = self.lock();
         let file = store.of(kind).file.as_ref().map_err(Clone::clone)?;
         Ok(file.packages.get(&identity.key()).map_or(0, BTreeMap::len))
@@ -393,6 +485,9 @@ impl ExtensionData {
     /// process saved since are kept, and a file the user repaired or deleted
     /// is used without restarting Pane. On failure nothing is removed.
     fn remove(&self, kind: DataKind, identity: &PackageIdentity) -> Result<(), Removal> {
+        if kind == DataKind::ClipboardHistory {
+            return self.clipboard.remove(&identity.key());
+        }
         let mut store = self.lock();
         let data = store.of(kind);
         data.file = read(&data.path);
@@ -412,15 +507,20 @@ impl ExtensionData {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, DataFile> {
-        self.0
+        self.files
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
+/// A kind's count of values by identity key (for clipboard history, its
+/// items; an identity that keeps only its choices counts 0), or why the
+/// kind's file cannot be read.
+type Counts = Result<BTreeMap<String, usize>, String>;
+
 /// Some kinds' files as they were read at one moment, to say what Pane keeps
-/// for a package.
-pub(crate) struct Kept(Vec<(DataKind, Result<DataJson, String>)>);
+/// for a package: each kind's [`Counts`].
+pub(crate) struct Kept(Vec<(DataKind, Counts)>);
 
 impl Kept {
     /// How many values of each kind Pane keeps for `identity`, such as
@@ -432,12 +532,14 @@ impl Kept {
         let parts: Vec<String> = self
             .0
             .iter()
-            .filter_map(|(kind, file)| {
+            .filter_map(|(kind, counts)| {
                 let (one, many) = kind.counted();
-                let count = file
-                    .as_ref()
-                    .map(|file| file.packages.get(&key).map_or(0, BTreeMap::len));
-                match count {
+                let count = counts.as_ref().map(|counts| counts.get(&key).copied());
+                if *kind == DataKind::ClipboardHistory && count == Ok(Some(0)) {
+                    // Only whether it keeps history, and the excluded programs.
+                    return Some("clipboard history settings".into());
+                }
+                match count.map(Option::unwrap_or_default) {
                     Ok(0) => None,
                     Ok(1) => Some(format!("1 {one}")),
                     Ok(count) => Some(format!("{count} {many}")),
@@ -454,7 +556,7 @@ impl Kept {
 }
 
 /// Why a kind's values could not be removed; none were.
-enum Removal {
+pub(crate) enum Removal {
     /// The file cannot be read, for this reason.
     Unreadable(String),
     /// The file at this path cannot be written.
@@ -536,6 +638,22 @@ impl PackageData {
         data.file = Ok(updated);
         Ok(())
     }
+
+    /// Every package's clipboard history, unless this data's generation
+    /// has ended: stopped code reads and changes nothing more.
+    pub fn clipboard_history(&self) -> Result<&HistoryStore, String> {
+        match self.refusal() {
+            Some(refusal) => Err(refusal.into()),
+            None => Ok(self.data.clipboard_history()),
+        }
+    }
+
+    /// Says that this package's clipboard capture state changed, which
+    /// starts or stops watching the clipboard (see
+    /// [`ExtensionData::set_changed`]).
+    pub fn changed(&self) {
+        self.data.changed();
+    }
 }
 
 /// Ends `current` for `why`. A generation Pane paused is replaced by one
@@ -575,6 +693,44 @@ fn read(path: &Path) -> Result<DataJson, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Clipboard history is kept only for packages whose code may run, and
+    /// each change of a generation says so.
+    #[test]
+    fn generation_changes_are_told_and_decide_who_runs() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let dir = tempfile::tempdir().unwrap();
+        let data = ExtensionData::open(dir.path());
+        let identity = PackageIdentity::local(dir.path()).unwrap();
+        let changes = Arc::new(AtomicUsize::new(0));
+        let counted = changes.clone();
+        data.set_changed(Arc::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }));
+        let told = || changes.load(Ordering::SeqCst);
+        data.set_enabled(&identity, true);
+        assert_eq!(data.running_owners(), [identity.key()]);
+        for stop in [
+            ExtensionData::pause as fn(&ExtensionData, &PackageIdentity),
+            ExtensionData::uninstall,
+        ] {
+            let before = told();
+            stop(&data, &identity);
+            assert!(data.running_owners().is_empty());
+            data.reinstate(&identity, true);
+            assert_eq!(data.running_owners(), [identity.key()]);
+            assert_eq!(told(), before + 2);
+        }
+        data.set_enabled(&identity, false);
+        assert!(data.running_owners().is_empty());
+        // Stopped code can no longer reach the history.
+        let stopped = data.owned_by(&identity);
+        assert!(stopped.clipboard_history().is_err());
+        data.set_enabled(&identity, true);
+        data.replace_code(&identity);
+        assert_eq!(data.running_owners(), [identity.key()]);
+        assert!(data.owned_by(&identity).clipboard_history().is_ok());
+    }
 
     /// Code whose generation ended reads and saves nothing more, even though a newer
     /// generation of the same package may.

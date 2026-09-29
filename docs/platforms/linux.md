@@ -722,6 +722,25 @@ whole smoke passed, and frames 160 to 169 were looked at.
 | Service stopped: "connection refused" | [168-offline.png](evidence/linux-x11/168-offline.png) |
 | Service back: results again | [169-back-online.png](evidence/linux-x11/169-back-online.png) |
 
+### Clipboard history (#35)
+
+Pane has no clipboard adapter on Linux yet (#38). A phase of its own, last,
+with its own data folder ([clipboard history](../clipboard-history.md#checks)),
+installs Clipboard History and types "clipboard": its command is listed as
+unavailable with its reason, and Enter shows the reason as the error and
+does not open it; no `clipboard-history.json` appears. No clipboard is read
+(Xvfb is the smoke's own display, and Pane has no adapter here). Run locally
+on 2026-09-29 as a phase alone (same Ubuntu 26.04.1 / Xvfb / lavapipe
+setup), and within the whole smoke (see below): its checks passed, and both
+frames were looked at.
+
+| Step | Evidence |
+| --- | --- |
+| Listed: "Clipboard History", "Keeps the text you copy, once you turn it on", "Not available on Linux: this command supports only Windows" | [280-clipboard-unavailable.png](evidence/linux-x11/280-clipboard-unavailable.png) |
+| Enter: the reason as the error, root search still shown | [281-clipboard-explained.png](evidence/linux-x11/281-clipboard-explained.png) |
+
+(Cropped to Pane's window; the smoke checks the whole frames.)
+
 ### Scheduled tasks (#47)
 
 The scheduled task phase ([scheduled tasks](../background.md#checks)), with

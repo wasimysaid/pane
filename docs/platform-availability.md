@@ -53,6 +53,11 @@ opens the command. The package's other commands are unaffected. When the
 package itself does not support this system, the package's reason is shown
 instead.
 
+The [Clipboard History](clipboard-history.md) default extension (#35) is the
+first package to use this: its command lists only Windows, the one system
+with a clipboard adapter so far, so on macOS and Linux it is installed and
+explained rather than opened (smoke frames 280 and 281 there).
+
 The components themselves are the same WASI 0.3 components on every system;
 the declaration is the author's statement of where the package works, and it
 is not evidence that it does ([record limits](current-decisions.md#record-limits)).

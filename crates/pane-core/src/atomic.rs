@@ -13,8 +13,10 @@ pub(crate) enum Readers {
     /// Unix).
     Default,
     /// Only the user Pane runs as: on Unix the file is created with mode
-    /// 0600, whatever the umask. On Windows the file takes its folder's
-    /// permissions, as with `Default`.
+    /// 0600, whatever the umask. On Windows it is created with a protected
+    /// DACL, inheriting nothing from its folder, that gives full control to
+    /// the user Pane runs as and to SYSTEM only
+    /// (`D:P(A;;FA;;;SY)(A;;FA;;;<user's SID>)`).
     OwnerOnly,
 }
 
@@ -53,10 +55,7 @@ pub(crate) fn write_atomically(path: &Path, contents: &[u8], readers: Readers) -
         NEXT_TEMPORARY.fetch_add(1, Ordering::Relaxed)
     ));
     let written = (|| {
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        restrict(&mut options, readers);
-        let mut file = options.open(&temporary)?;
+        let mut file = create_new(&temporary, readers)?;
         file.write_all(contents)?;
         file.sync_all()?;
         drop(file);
@@ -69,16 +68,144 @@ pub(crate) fn write_atomically(path: &Path, contents: &[u8], readers: Readers) -
     sync_dir(dir)
 }
 
+/// Creates the file at `path`, which must not exist yet, for writing,
+/// readable by `readers` from the moment it exists.
 #[cfg(unix)]
-fn restrict(options: &mut OpenOptions, readers: Readers) {
+fn create_new(path: &Path, readers: Readers) -> io::Result<fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
     if readers == Readers::OwnerOnly {
         options.mode(0o600);
     }
+    options.open(path)
 }
 
-#[cfg(not(unix))]
-fn restrict(_options: &mut OpenOptions, _readers: Readers) {}
+#[cfg(windows)]
+fn create_new(path: &Path, readers: Readers) -> io::Result<fs::File> {
+    match readers {
+        Readers::Default => OpenOptions::new().write(true).create_new(true).open(path),
+        Readers::OwnerOnly => owner_only::create_new(path),
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn create_new(path: &Path, _readers: Readers) -> io::Result<fs::File> {
+    OpenOptions::new().write(true).create_new(true).open(path)
+}
+
+/// Files only the user Pane runs as (and SYSTEM) can open, on Windows.
+#[cfg(windows)]
+mod owner_only {
+    use std::fs::File;
+    use std::io;
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::FromRawHandle;
+    use std::path::Path;
+
+    use ::windows::Win32::Foundation::{CloseHandle, GENERIC_WRITE, HANDLE, HLOCAL, LocalFree};
+    use ::windows::Win32::Security::Authorization::{
+        ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
+        SDDL_REVISION_1,
+    };
+    use ::windows::Win32::Security::{
+        GetTokenInformation, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
+        TokenUser,
+    };
+    use ::windows::Win32::Storage::FileSystem::{
+        CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_NONE,
+    };
+    use ::windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    use ::windows::core::{PCWSTR, PWSTR};
+
+    fn failed(error: ::windows::core::Error) -> io::Error {
+        io::Error::from_raw_os_error(error.code().0 & 0xFFFF)
+    }
+
+    /// The SID of the user this process runs as, in its string form.
+    pub(super) fn user_sid() -> io::Result<String> {
+        let mut token = HANDLE::default();
+        // SAFETY: the current process's pseudo handle; `token` is writable
+        // and closed below.
+        unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) }
+            .map_err(failed)?;
+        let sid = (|| {
+            let mut length = 0u32;
+            // SAFETY: asks for the size only; this call fails by design.
+            let _ = unsafe { GetTokenInformation(token, TokenUser, None, 0, &mut length) };
+            // u64s, so the buffer is aligned for TOKEN_USER.
+            let mut buffer = vec![0u64; (length as usize).div_ceil(8)];
+            // SAFETY: `buffer` is writable for `length` bytes.
+            unsafe {
+                GetTokenInformation(
+                    token,
+                    TokenUser,
+                    Some(buffer.as_mut_ptr().cast()),
+                    length,
+                    &mut length,
+                )
+            }
+            .map_err(failed)?;
+            // SAFETY: the buffer now holds a TOKEN_USER, whose SID points
+            // into the same buffer.
+            let user = unsafe { &*buffer.as_ptr().cast::<TOKEN_USER>() };
+            let mut text = PWSTR::null();
+            // SAFETY: a valid SID; `text` is freed below.
+            unsafe { ConvertSidToStringSidW(user.User.Sid, &mut text) }.map_err(failed)?;
+            // SAFETY: a NUL-terminated string the call allocated.
+            let sid = unsafe { text.to_string() };
+            // SAFETY: allocated by ConvertSidToStringSidW with LocalAlloc.
+            unsafe { LocalFree(Some(HLOCAL(text.0.cast()))) };
+            sid.map_err(|_| io::Error::other("the user's SID is not valid UTF-16"))
+        })();
+        // SAFETY: opened above.
+        let _ = unsafe { CloseHandle(token) };
+        sid
+    }
+
+    /// Creates the file at `path`, which must not exist yet, for writing,
+    /// with a protected DACL giving full control to this user and SYSTEM
+    /// only.
+    pub(super) fn create_new(path: &Path) -> io::Result<File> {
+        let sddl = format!("D:P(A;;FA;;;SY)(A;;FA;;;{})", user_sid()?);
+        let sddl: Vec<u16> = sddl.encode_utf16().chain([0]).collect();
+        let mut descriptor = PSECURITY_DESCRIPTOR::default();
+        // SAFETY: `sddl` is NUL-terminated; the descriptor is freed below.
+        unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                PCWSTR(sddl.as_ptr()),
+                SDDL_REVISION_1,
+                &mut descriptor,
+                None,
+            )
+        }
+        .map_err(failed)?;
+        let attributes = SECURITY_ATTRIBUTES {
+            nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: descriptor.0,
+            bInheritHandle: false.into(),
+        };
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+        // SAFETY: `wide` is NUL-terminated and `attributes` valid for the
+        // call; the handle is owned by the returned file.
+        let created = unsafe {
+            CreateFileW(
+                PCWSTR(wide.as_ptr()),
+                GENERIC_WRITE.0,
+                FILE_SHARE_NONE,
+                Some(&attributes),
+                CREATE_NEW,
+                FILE_ATTRIBUTE_NORMAL,
+                None,
+            )
+        };
+        // SAFETY: allocated by the conversion above with LocalAlloc.
+        unsafe { LocalFree(Some(HLOCAL(descriptor.0))) };
+        let handle = created.map_err(failed)?;
+        // SAFETY: a new, valid handle nothing else owns.
+        Ok(unsafe { File::from_raw_handle(handle.0) })
+    }
+}
 
 #[cfg(unix)]
 fn sync_dir(dir: &Path) -> io::Result<()> {
@@ -133,5 +260,93 @@ mod tests {
             .map(|entry| entry.unwrap().file_name())
             .collect();
         assert_eq!(names, ["installed.json"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_owner_only_file_has_mode_0600_whatever_it_replaced() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        write_atomically(&path, b"{}", Readers::Default).unwrap();
+        write_atomically(&path, b"{\"a\":1}", Readers::OwnerOnly).unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    /// The file's DACL, in SDDL.
+    #[cfg(windows)]
+    fn dacl(path: &std::path::Path) -> String {
+        use ::windows::Win32::Foundation::{HLOCAL, LocalFree};
+        use ::windows::Win32::Security::Authorization::{
+            ConvertSecurityDescriptorToStringSecurityDescriptorW, GetNamedSecurityInfoW,
+            SDDL_REVISION_1, SE_FILE_OBJECT,
+        };
+        use ::windows::Win32::Security::{DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR};
+        use ::windows::core::{PCWSTR, PWSTR};
+        use std::os::windows::ffi::OsStrExt;
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+        let mut descriptor = PSECURITY_DESCRIPTOR::default();
+        // SAFETY: `wide` is NUL-terminated; the descriptor is freed below.
+        let status = unsafe {
+            GetNamedSecurityInfoW(
+                PCWSTR(wide.as_ptr()),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                None,
+                None,
+                None,
+                None,
+                &mut descriptor,
+            )
+        };
+        assert!(status.is_ok(), "{status:?}");
+        let mut text = PWSTR::null();
+        // SAFETY: a valid descriptor; `text` is freed below.
+        unsafe {
+            ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                descriptor,
+                SDDL_REVISION_1,
+                DACL_SECURITY_INFORMATION,
+                &mut text,
+                None,
+            )
+        }
+        .unwrap();
+        // SAFETY: a NUL-terminated string the call allocated.
+        let sddl = unsafe { text.to_string() }.unwrap();
+        // SAFETY: both were allocated with LocalAlloc by the calls above.
+        unsafe {
+            LocalFree(Some(HLOCAL(text.0.cast())));
+            LocalFree(Some(HLOCAL(descriptor.0)));
+        }
+        sddl
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_owner_only_file_is_open_to_this_user_and_system_only_whatever_it_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        write_atomically(&path, b"{}", Readers::Default).unwrap();
+        // A file of the folder's permissions inherits them.
+        assert!(!dacl(&path).starts_with("D:P"), "{}", dacl(&path));
+        write_atomically(&path, b"{\"a\":1}", Readers::OwnerOnly).unwrap();
+        let sddl = dacl(&path);
+        let mut user = super::owner_only::user_sid().unwrap();
+        // SDDL names the built-in Administrator account by its alias.
+        if user.starts_with("S-1-5-21-") && user.ends_with("-500") {
+            user = "LA".into();
+        }
+        assert!(sddl.starts_with("D:P"), "{sddl}");
+        let mut entries: Vec<&str> = sddl["D:P".len()..]
+            .trim_matches(['(', ')'])
+            .split(")(")
+            .collect();
+        entries.sort_unstable();
+        let mut expected = ["A;;FA;;;SY".to_string(), format!("A;;FA;;;{user}")];
+        expected.sort_unstable();
+        assert_eq!(entries, expected, "{sddl}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{\"a\":1}");
     }
 }

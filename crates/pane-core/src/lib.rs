@@ -4,6 +4,7 @@
 pub mod applications;
 mod atomic;
 pub mod changes;
+pub mod clipboard;
 pub mod clock;
 mod dependencies;
 pub mod develop;
@@ -21,6 +22,7 @@ mod packages;
 mod platform;
 mod runtime;
 mod search;
+mod threads;
 
 pub use helpers::runner::{MAX_HELPER_INPUT, MAX_HELPER_OUTPUT};
 #[doc(hidden)]

@@ -1387,6 +1387,28 @@ python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{161-root-typed,
 stop_pane
 stop_service
 
+# Clipboard history (#35): Pane watches the clipboard only on Windows so
+# far, so here the Clipboard History default extension installs and its
+# command is listed with why it does not run (in amber); Enter explains it
+# (the error line) and runs nothing, and no history file appears. A data
+# folder of its own. No clipboard is read: Pane has no clipboard adapter on
+# Linux, and Xvfb is the smoke's own display.
+export PANE_DATA_DIR=$out/clipboard-data
+rm -rf "$PANE_DATA_DIR"
+start_pane --install target/guests/packages/clipboard-history
+"$xdotool" windowfocus --sync "$window"
+"$xdotool" key Return   # Install
+wait_for "$PANE_DATA_DIR/extensions/installed.json" clipboard-history present; sleep 1
+"$xdotool" type --delay 50 clipboard; sleep 1
+capture 280-clipboard-unavailable.png
+check 280-clipboard-unavailable.png d6a36a   # "Not available on Linux: this command supports only Windows"
+"$xdotool" key Return; sleep 2
+capture 281-clipboard-explained.png
+check 281-clipboard-explained.png f08c8c   # the reason as the error; the command did not open
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{280-clipboard-unavailable,281-clipboard-explained}.png
+stop_pane
+if [ -e "$PANE_DATA_DIR/extensions/clipboard-history.json" ]; then echo "clipboard history was kept on Linux"; exit 1; fi
+
 # Scheduled tasks (#47): the background sample's Ticks declares a schedule
 # (every minute). Installing it schedules nothing; its row in Manage
 # extensions turns the schedule on, which runs the task at once in the

@@ -43,6 +43,10 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
 - `sample-files-js`, `sample-files-ts`: the same host import and `open-file`
   results in JavaScript and TypeScript; held by
   `crates/pane-core/tests/files.rs`.
+- `sample-clipboard-js`, `sample-clipboard-ts`: the Clipboard History
+  command in JavaScript and TypeScript, over the same host import
+  ([Clipboard history](#clipboard-history)); held by
+  `crates/pane-core/tests/clipboard.rs`.
 - `sample-helper`, `sample-helper-js`, `sample-helper-ts`: a command in
   Rust, JavaScript and TypeScript running a [native helper](#native-helpers)
   its package ships, `helpers/echo` (`pane-echo`, an ordinary program
@@ -697,6 +701,55 @@ The [JavaScript](sample-applications-js) and
 [TypeScript](sample-applications-ts) applications samples do this, and
 their commands list the applications and open one with `open(id)`; their
 packages in [`packages/`](packages) set `indexedResults`.
+
+## Clipboard history
+
+A Rust command can keep clipboard history through Pane
+(`pane_guest::clipboard_history`, the `pane:extension/clipboard-history`
+import, [`wit/clipboard.wit`](../wit/clipboard.wit)): Pane itself watches
+the clipboard and keeps the text the user copies for the command's package,
+once the command turned it on, and only while the package runs and the
+history is not paused. The package does not run while text is copied; it
+reads what Pane kept:
+
+```rust
+use pane_guest::clipboard_history::{self as history, Capture};
+
+// From an action the user chose, never on its own: history starts off.
+history::set_capture(Capture::On)?;
+for entry in history::entries()? {
+    // entry.text, entry.age_seconds, entry.source ("notepad.exe")
+}
+```
+
+`status()` says whether it is on, why Pane cannot watch the clipboard (such
+as on a system without an adapter), the excluded programs and the count;
+`set-excluded` replaces the excluded programs, `copy(id)` puts an item on the
+clipboard again and `clear()` deletes every item. Pane keeps plain text
+only, never text marked by its application as not to be kept, and nothing
+while the package is disabled. The [Clipboard History](clipboard-history)
+default extension is the example; see [clipboard history](../docs/clipboard-history.md).
+Only Windows has a clipboard adapter so far, so its package declares
+`"platforms": ["windows"]`.
+
+A JavaScript or TypeScript command imports it when its package.json sets
+`"pane": { "clipboardHistory": true }` (declared in
+[`js/clipboard.d.ts`](js/clipboard.d.ts)); a command that does not set it
+does not import it. Each function throws, on failure, an object whose
+`payload` is the reason:
+
+```ts
+import * as history from "pane:extension/clipboard-history@0.1.0";
+
+history.setCapture("on");
+for (const entry of history.entries()) {
+  // entry.text, entry.ageSeconds, entry.source ("notepad.exe")
+}
+```
+
+[`sample-clipboard-js`](sample-clipboard-js) and
+[`sample-clipboard-ts`](sample-clipboard-ts) implement the Clipboard History
+command in JavaScript and TypeScript.
 
 ## A scheduled task
 

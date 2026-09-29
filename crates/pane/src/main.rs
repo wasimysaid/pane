@@ -83,6 +83,9 @@ fn main() {
         // whose run loop receives the presses on macOS.
         let (press_sender, mut presses) = pane_core::hotkeys::channel();
         let launcher = launcher.with_hotkeys(pane_core::hotkeys::native(press_sender));
+        // Clipboard history: Pane watches the clipboard only while an
+        // enabled package keeps history the user turned on.
+        let launcher = launcher.with_clipboard(pane_core::clipboard::native());
         // Development mode builds with the author's tools; a JavaScript or
         // TypeScript package with this checkout's build unless
         // PANE_COMPONENTIZE_JS names another.

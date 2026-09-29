@@ -19,9 +19,11 @@
 // (wit/operations.wit), `takesQuery` (wit/query.wit), `search`
 // (wit/search.wit), `scheduledTask` and `service` (wit/background.wit);
 // `files` makes it import the granted folder's listing
-// (wit/files.wit), which no other command imports. A command whose bundle
-// imports "pane:extension/service-status@0.1.0" (a service showing its
-// status) imports it, and no other command does. The build writes a world
+// (wit/files.wit) and `clipboardHistory` the clipboard history Pane keeps
+// for it (wit/clipboard.wit), which no other command imports. A command
+// whose bundle imports "pane:extension/service-status@0.1.0" (a service
+// showing its status) imports it, and no other command does. The build
+// writes a world
 // `js-command` including this one with those exports and imports
 // (tools/componentize-js/pane_js.py).
 package pane:js-guest@0.1.0;

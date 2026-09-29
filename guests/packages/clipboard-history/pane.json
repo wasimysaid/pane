@@ -1,0 +1,15 @@
+{
+  "manifestVersion": 1,
+  "title": "Clipboard History",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "clipboard-history",
+      "title": "Clipboard History",
+      "subtitle": "Keeps the text you copy, once you turn it on",
+      "component": "clipboard_history.wasm",
+      "platforms": ["windows"]
+    }
+  ]
+}

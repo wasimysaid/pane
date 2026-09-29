@@ -316,6 +316,16 @@ must log the held search as abandoned; the service's 503, then the service
 stopped, are errors; restarted, a search lists results again.
 **Not run on macOS yet.**
 
+## Clipboard history (#35)
+
+Pane has no clipboard adapter on macOS yet (#37). The smoke's clipboard
+phase (screenshots 280 and 281), with a data folder of its own, installs
+Clipboard History, whose command is then listed in root search as "Not
+available on macOS: this command supports only Windows" (the unavailable
+color); Enter shows that as the error and does not open it, and no
+`clipboard-history.json` appears. No clipboard is read. **Not run on macOS
+yet.**
+
 ## Scheduled tasks (#47)
 
 The smoke's scheduled task phase (screenshots 320 to 327, [scheduled tasks](../background.md#checks)),

@@ -49,6 +49,11 @@ jobs:
             guests/fixtures/mixed-p2
       - name: Build guests, check formatting and lints, run tests
         run: cargo xtask ci
+        env:
+          # The Windows clipboard adapter's test replaces what is on the
+          # clipboard, so it runs only where this is set: on CI's runner,
+          # never by default on a developer's computer.
+          PANE_TEST_REAL_CLIPBOARD: ${{ runner.os == 'Windows' && '1' || '' }}
       - name: Build the launcher
         run: cargo build --locked -p pane
       - uses: actions/setup-python@v5

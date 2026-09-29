@@ -308,6 +308,36 @@ must log the held search as abandoned; the service's 503, then the service
 stopped, are errors; restarted, a search lists results again. Windows retries a refused connection for about two seconds, so the offline step waits longer.
 **Not run on Windows yet.**
 
+## Clipboard history (#35)
+
+The smoke's clipboard phase (screenshots 280 to 285, [clipboard history](../clipboard-history.md#checks)),
+with a data folder of its own, installs Clipboard History and checks
+`clipboard-history.json` at each step: text copied before it is turned on is
+not kept; once turned on (its first row) plain text is kept, while text
+carrying `ExcludeClipboardContentFromMonitorProcessing`,
+`CanIncludeInClipboardHistory` = 0 or `CanUploadToCloudClipboard` = 0 is
+not; nothing is kept while paused, or while disabled, also after a restart;
+Enter on a kept item puts it on the clipboard again and moves it to the
+front; enabled again, text is kept, also after a restart, before the command
+is opened. The smoke copies only its own `pane-smoke-...` text, through the
+clipboard API from PowerShell, and so replaces what was on the clipboard,
+without reading or restoring it. `clipboard_adapter.rs` checks the adapter
+alone: plain text reported with its owner (the test's process), each marker
+read and withholding the text, a written text reported, and nothing once
+the watch is dropped; it too replaces the clipboard, so it runs only with
+`PANE_TEST_REAL_CLIPBOARD=1`, which CI's Windows job sets. `atomic.rs`'s
+Windows unit test checks the owner-only DACL of `clipboard-history.json`
+and `credentials.json`.
+
+The adapter, the shared message thread (also the hotkey adapter's), the
+DACL and these tests were only compile- and lint-checked for
+`x86_64-pc-windows-gnu` from Linux; **not run on Windows yet**. They run in
+CI (`cargo xtask ci` with `PANE_TEST_REAL_CLIPBOARD=1`, then
+`smoke-windows.ps1`) on `windows-2025`, and the next green Windows run of
+the branch is their evidence: until then the listener's delivery, the
+retry and stop paths, the markers as real password managers set them, the
+owner lookup and the DACL are unverified natively.
+
 ## Scheduled tasks (#47)
 
 The smoke's scheduled task phase (screenshots 320 to 327, [scheduled tasks](../background.md#checks)),
