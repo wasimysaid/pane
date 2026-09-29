@@ -37,6 +37,8 @@ const PREBUILT: &[&str] = &[
     "sample_npm_js",
     "sample_background_js",
     "sample_background_ts",
+    "sample_service_js",
+    "sample_service_ts",
 ];
 
 fn main() -> ExitCode {
@@ -100,6 +102,7 @@ fn guests() -> Result<(), String> {
                 "sample_search",
                 "sample_helper",
                 "sample_background",
+                "sample_service",
                 "faulty",
                 "operations_fixture",
                 "old_api",
@@ -248,7 +251,7 @@ fn npm_sample(root: &Path, out: &Path) -> Result<(), String> {
 /// (package folder in `guests/packages`, component) of each sample package,
 /// and of the default extensions (the calculator, applications and
 /// quicklinks).
-const SAMPLE_PACKAGES: [(&str, &str); 31] = [
+const SAMPLE_PACKAGES: [(&str, &str); 34] = [
     ("sample-rust", "sample_rust"),
     ("sample-settings", "sample_settings"),
     ("sample-js", "sample_js"),
@@ -280,6 +283,9 @@ const SAMPLE_PACKAGES: [(&str, &str); 31] = [
     ("sample-background", "sample_background"),
     ("sample-background-js", "sample_background_js"),
     ("sample-background-ts", "sample_background_ts"),
+    ("sample-service", "sample_service"),
+    ("sample-service-js", "sample_service_js"),
+    ("sample-service-ts", "sample_service_ts"),
 ];
 
 /// Rebuilds `guests/prebuilt/` from the JS/TS sample sources, then refreshes

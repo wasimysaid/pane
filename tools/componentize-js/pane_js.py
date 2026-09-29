@@ -49,6 +49,7 @@ EXPORT_OPTIONS = {
     "takesQuery": "pane:extension/query-command@0.1.0",
     "search": "pane:extension/command-search@0.1.0",
     "scheduledTask": "pane:extension/scheduled-task@0.1.0",
+    "service": "pane:extension/service@0.1.0",
 }
 # `"pane"` option -> the interface a command setting it also imports, beyond
 # what every command may import (`js-extension`): a command that sets none
@@ -79,6 +80,8 @@ SAMPLES = [
     ("sample_npm_js.wasm", "guests/sample-npm-js"),
     ("sample_background_js.wasm", "guests/sample-background-js"),
     ("sample_background_ts.wasm", "guests/sample-background-ts"),
+    ("sample_service_js.wasm", "guests/sample-service-js"),
+    ("sample_service_ts.wasm", "guests/sample-service-ts"),
 ]
 # Pane's WIT, copied beside the world in guests/js/wit.
 PANE_WIT = ["extension.wit", "data.wit", "root-results.wit", "operations.wit", "applications.wit", "query.wit",
@@ -392,7 +395,8 @@ def build(package: Path, out: Path, toolchain: Toolchain) -> dict:
     for path in WASI_WIT:
         shutil.copyfile(path, wit / "deps" / path.name)
     out.parent.mkdir(parents=True, exist_ok=True)
-    world = command_world(manifest.get("pane", {}), uses_http(bundle.read_text(encoding="utf-8")))
+    bundled = bundle.read_text(encoding="utf-8")
+    world = command_world(manifest.get("pane", {}), uses_http(bundled), uses_status(bundled))
     (wit / "command.wit").write_text(world, encoding="utf-8")
     report = run([toolchain.componentizer, wit, COMMAND_WORLD, bundle, toolchain.runtime, out],
                  env=clean_env(QJS_P3_LIBC=str(toolchain.libc)), capture=True)
@@ -410,6 +414,7 @@ ADAPTED_PROVIDERS = {
     "takesQuery": ("queryCommand", "runQuery"),
     "search": ("commandSearch", "search"),
     "scheduledTask": ("scheduledTask", "runTask"),
+    "service": ("service", "runService"),
 }
 
 
@@ -442,9 +447,20 @@ def uses_http(bundle: str) -> bool:
     return re.search(r"""(?:from|import)\s*\(?\s*["']wasi:http/""", bundle) is not None
 
 
-def command_world(options: dict, http: bool) -> str:
+# A running service's status, which a command imports only if its bundle
+# uses it, so that adding it changed no other command's component.
+STATUS_IMPORT = "pane:extension/service-status@0.1.0"
+
+
+def uses_status(bundle: str) -> bool:
+    """Whether the bundled module imports the service status interface."""
+    return re.search(r"""(?:from|import)\s*\(?\s*["']pane:extension/service-status@""", bundle) is not None
+
+
+def command_world(options: dict, http: bool, status: bool = False) -> str:
     """The world `js-command`: `js-extension` exporting and importing what
-    `options` name, and importing `wasi:http`'s client if `http`."""
+    `options` name, importing `wasi:http`'s client if `http` and the
+    service status if `status`."""
     unknown = sorted(set(options) - set(EXPORT_OPTIONS) - set(IMPORT_OPTIONS))
     if unknown:
         raise SystemExit(f"pane-js: unknown \"pane\" options in package.json: {', '.join(unknown)}")
@@ -454,6 +470,8 @@ def command_world(options: dict, http: bool) -> str:
                       if options.get(option))
     if http:
         imports += f"  import {HTTP_IMPORT};\n"
+    if status:
+        imports += f"  import {STATUS_IMPORT};\n"
     return (f"package pane:js-guest@0.1.0;\n\nworld {COMMAND_WORLD} {{\n  include {WORLD};\n"
             f"{imports}{exports}}}\n")
 

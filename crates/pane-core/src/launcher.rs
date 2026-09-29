@@ -64,6 +64,7 @@ mod recovery;
 mod reload;
 mod retained;
 mod scheduled;
+mod services;
 mod uninstall;
 
 use aliases::AliasChoices;
@@ -75,6 +76,7 @@ pub use developing::{BuildFailure, Development};
 use hotkeys::Bindings;
 use pausing::{Pauses, Recorder};
 pub use scheduled::{ScheduledTask, TaskOutcome};
+pub use services::{RESTART_DELAY, ServiceOutcome, ServiceState};
 
 /// The id of the root row that installs a package from a local folder.
 const INSTALL_FROM_FOLDER: &str = "pane.install-from-folder";
@@ -555,6 +557,8 @@ struct State {
     aliases: Record<AliasChoices>,
     /// The scheduled tasks the user turned on, and their runs.
     tasks: scheduled::Tasks,
+    /// The continuing services the user started, and their runs.
+    services: services::Services,
     /// Wakes the background work's driver when a change to a package ends
     /// ([`State::release`]); none until the launcher runs background work.
     background: Option<std::sync::Weak<Background>>,
@@ -878,6 +882,9 @@ enum Entry {
     /// Turn the schedule of the scheduled task of the command with this id
     /// on, or off (extension list).
     ToggleTask(String),
+    /// Start the service of the command with this id if it is stopped, else
+    /// stop it.
+    ToggleService(String),
     /// Ask whether to uninstall this installed package, and whether to keep
     /// its saved data (extension list).
     AskUninstall(PackageIdentity),
@@ -1010,6 +1017,11 @@ impl Launcher {
                 .as_ref()
                 .map_or_else(scheduled::Tasks::default, |installation| {
                     scheduled::Tasks::open(&installation.dir)
+                }),
+            services: installation
+                .as_ref()
+                .map_or_else(services::Services::default, |installation| {
+                    services::Services::open(&installation.dir)
                 }),
             background: None,
             sent_from: None,
@@ -1596,6 +1608,7 @@ impl Launcher {
         let mut hotkey_change = None;
         let mut choice_change = None;
         let mut task_switch = None;
+        let mut service_switch = None;
         let mut uninstall = None;
         let mut develop = None;
         let mut delete_retained = None;
@@ -1737,6 +1750,10 @@ impl Launcher {
                 task_switch = self.toggle_task(&mut state, &command);
                 None
             }
+            Some(Entry::ToggleService(command)) => {
+                service_switch = self.toggle_service(&mut state, &command);
+                None
+            }
             Some(Entry::Toggle(identity)) => {
                 // The package's state when the user pressed, not when the
                 // future runs.
@@ -1812,6 +1829,9 @@ impl Launcher {
             if let Some(task_switch) = task_switch {
                 launcher.finish_task_switch(task_switch).await;
             }
+            if let Some(service_switch) = service_switch {
+                launcher.finish_service_switch(service_switch).await;
+            }
             if let Some(uninstall) = uninstall {
                 launcher.finish_uninstall(epoch, uninstall).await;
             }
@@ -1876,6 +1896,7 @@ impl Launcher {
                     | Entry::ToggleFallback(_)
                     | Entry::ForgetChoices(_)
                     | Entry::ToggleTask(_)
+                    | Entry::ToggleService(_)
                     | Entry::AskUninstall(_)
                     | Entry::Uninstall(..)
                     | Entry::UninstallAll(..)
@@ -2765,6 +2786,7 @@ impl Launcher {
             .network_rows(state)
             .into_iter()
             .chain(self.schedule_rows(state))
+            .chain(self.service_rows(state))
         {
             rows.push(row);
             entries.push(entry);

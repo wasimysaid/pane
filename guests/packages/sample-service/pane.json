@@ -1,0 +1,15 @@
+{
+  "manifestVersion": 1,
+  "title": "Service sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "heartbeat",
+      "title": "Heartbeat",
+      "subtitle": "Beats every second in the background once started",
+      "component": "sample_service.wasm",
+      "service": true
+    }
+  ]
+}

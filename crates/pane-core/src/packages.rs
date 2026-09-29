@@ -402,6 +402,10 @@ pub struct ManifestCommand {
     /// command without one. Its component then also exports
     /// `pane:extension/scheduled-task`.
     pub schedule: Option<Schedule>,
+    /// Whether the command has a continuing service Pane keeps running in
+    /// the background once the user starts it (`"service": true`). Its
+    /// component then also exports `pane:extension/service`.
+    pub service: bool,
 }
 
 /// The one kind of schedule a command can declare: every so many minutes,
@@ -518,6 +522,8 @@ struct CommandJson {
     search: bool,
     #[serde(default)]
     schedule: Option<ScheduleJson>,
+    #[serde(default)]
+    service: bool,
 }
 
 impl Manifest {
@@ -622,6 +628,7 @@ impl Manifest {
             query_command: commands().any(|command| command.takes_query),
             search: commands().any(|command| command.search),
             scheduled_task: commands().any(|command| command.schedule.is_some()),
+            service: commands().any(|command| command.service),
             operations: self
                 .operations
                 .iter()
@@ -716,6 +723,7 @@ impl Manifest {
                 takes_query: command.takes_query,
                 search: command.search,
                 schedule,
+                service: command.service,
             });
         }
         let mut operations: Vec<ManifestOperation> = Vec::new();
@@ -2318,6 +2326,26 @@ mod tests {
         .unwrap();
         assert_eq!(plain.commands[0].schedule, None);
         assert!(!plain.exports_of(Path::new("c.wasm")).scheduled_task);
+    }
+
+    #[test]
+    fn a_service_is_declared_with_one_flag() {
+        let manifest = |service: &str| {
+            Manifest::parse(&format!(
+                r#"{{ "manifestVersion": 1, "title": "Beats", "apiVersion": "0.1",
+                     "commands": [{{ "id": "beat", "title": "Beat", "component": "c.wasm"
+                                     {service} }}] }}"#
+            ))
+        };
+        let declared = manifest(r#", "service": true"#).unwrap();
+        assert!(declared.commands[0].service);
+        assert!(declared.exports_of(Path::new("c.wasm")).service);
+        let plain = manifest("").unwrap();
+        assert!(!plain.commands[0].service);
+        assert!(!plain.exports_of(Path::new("c.wasm")).service);
+        // Only a flag: anything else is refused, not ignored.
+        assert!(manifest(r#", "service": { "restart": "always" }"#).is_err());
+        assert!(manifest(r#", "service": "yes""#).is_err());
     }
 
     /// This test binary: a program for this system's target.

@@ -139,7 +139,11 @@ resume in the store. So:
   is stopped with its instance when that generation ends (or the user turns
   its schedule off), and its answer is then discarded;
   `Runtime::background_running` lists the runs in progress, which is how
-  the tests see that none survives a disable or reload.
+  the tests see that none survives a disable or reload. A
+  [continuing service](background.md#continuing-services) (#48) belongs to
+  its generation the same way, and its status with it: a status set by a
+  stopped run is refused, and the next generation (an enable, a reload's or
+  update's new code, Retry) starts the service again at once.
 - Measured cleanup is what the runtime reports (`Runtime::running`,
   `Runtime::view_count`); memory returned to the operating system after a
   dropped store is not measured.

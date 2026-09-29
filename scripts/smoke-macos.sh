@@ -1382,4 +1382,57 @@ python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{321-schedule-of
 stop_pane
 grep -q '"tasks": {}' "$PANE_DATA_DIR/extensions/schedules.json" || { echo "the schedule turned off is still recorded"; exit 1; }
 
+# Continuing services (#48): the service sample's Heartbeat sets
+# "service": true. Installing it starts nothing; its row in Manage extensions
+# starts it, and it runs in the background, beating every second: the row
+# shows its status, and the count it keeps grows. Disabling the package stops
+# it where it waits (the count stops), enabling it starts it again at once,
+# and stopping it on its row stops it for good (the record forgets it). A
+# data folder of its own keeps the rows in a known order: the package's four
+# rows, then Service: Heartbeat.
+export PANE_DATA_DIR=$out/service-data
+rm -rf "$PANE_DATA_DIR"
+services=$PANE_DATA_DIR/extensions/services.json
+start_pane --install target/guests/packages/sample-service
+key 36; sleep 2   # Install; Heartbeat is selected
+capture 330-service-installed.png
+check 330-service-installed.png 9fd8a8   # "Installed Service sample ..."
+[ "$(kept beats)" = none ] || { echo "installing started the service"; exit 1; }
+type_text manage; sleep 1
+key 36; sleep 1   # Manage extensions
+for ((i = 0; i < 4; i++)); do key 125; done   # Service: Heartbeat
+sleep 1
+capture 331-service-stopped.png   # "Stopped · Start it to run in the background while Pane runs"
+check 331-service-stopped.png 364355 3000
+key 36; sleep 3   # start it
+capture 332-service-running.png   # "Running · Beat N"
+check 332-service-running.png 9fd8a8   # "Heartbeat runs in the background from now on"
+first=$(kept beats)
+[ "$first" != none ] || { echo "starting the service did not run it"; exit 1; }
+grep -q '#heartbeat"' "$services" || { echo "the started service was not recorded"; exit 1; }
+sleep 3
+[ "$(kept beats)" -gt "$first" ] || { echo "the service did not go on beating"; exit 1; }
+for ((i = 0; i < 4; i++)); do key 126; done   # Service sample
+key 36; sleep 2   # disable it while its service waits
+capture 333-service-disabled.png
+check 333-service-disabled.png 9fd8a8   # "Disabled Service sample"
+stopped=$(kept beats)
+sleep 3   # three beats' time
+[ "$(kept beats)" = "$stopped" ] || { echo "the disabled package's service beat on"; exit 1; }
+key 36; sleep 3   # enable it again: its service starts again at once
+for ((i = 0; i < 4; i++)); do key 125; done   # Service: Heartbeat
+sleep 1
+capture 334-service-restarted.png   # "Running · Beat N", counting on
+check 334-service-restarted.png 364355 3000
+[ "$(kept beats)" -gt "$stopped" ] || { echo "enabling did not start the service again"; exit 1; }
+key 36; sleep 2   # stop it
+capture 335-service-turned-off.png
+check 335-service-turned-off.png 9fd8a8   # "Heartbeat was stopped"
+stopped=$(kept beats)
+sleep 3
+[ "$(kept beats)" = "$stopped" ] || { echo "the stopped service beat on"; exit 1; }
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{331-service-stopped,332-service-running,333-service-disabled,334-service-restarted,335-service-turned-off}.png
+stop_pane
+grep -q '"services": \[\]' "$services" || { echo "the stopped service is still recorded"; exit 1; }
+
 echo "screenshots in $out"

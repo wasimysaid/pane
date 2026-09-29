@@ -9,6 +9,7 @@
 /// <reference path="./applications.d.ts" />
 /// <reference path="./helpers.d.ts" />
 /// <reference path="./files.d.ts" />
+/// <reference path="./service.d.ts" />
 
 /** One entry in a command's list view. */
 export interface Item {
@@ -446,4 +447,45 @@ export interface ScheduledTask {
    * on one thread. Calling other packages' operations is refused here.
    */
   runTask(command: string): Promise<string>;
+}
+
+/**
+ * A command's continuing service (`pane:extension/service` in
+ * wit/background.wit), which Pane keeps running in the background once the
+ * user starts it in Manage extensions, and starts again whenever the
+ * command's package's code starts again. A command with one sets
+ * `"service": true` on its entry in `pane.json`, and
+ * `"pane": { "service": true }` in its `package.json` so that it is built
+ * with the interface; its module exports it as `service`, and shows how it
+ * is doing with `setStatus` from `"pane:extension/service-status@0.1.0"`:
+ *
+ * ```ts
+ * import { setStatus } from "pane:extension/service-status@0.1.0";
+ * import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
+ *
+ * export const service: Service = {
+ *   async runService(command) {
+ *     for (let beat = 1; ; beat++) {
+ *       setStatus(`Beat ${beat}`);
+ *       await waitFor(1_000_000_000);
+ *     }
+ *   },
+ * };
+ * ```
+ */
+export interface Service {
+  /**
+   * Runs the service of the command with id `command` (its id in
+   * `pane.json`), normally for as long as Pane lets it: awaiting what it
+   * watches in a loop. Resolving ends it, shown as how it finished, and Pane
+   * does not start it again until its package's code starts again;
+   * throwing shows the error as its failure, and Pane starts it again a
+   * minute later. It runs in an instance of its own, stopped where it
+   * awaits when the package is disabled, reloaded, updated, paused or
+   * uninstalled, or the user stops it. Await between pieces of work: every
+   * extension's calls are served on one thread, and a service is judged by
+   * how long it computes between two awaits, never by how long it runs.
+   * Calling other packages' operations is refused here.
+   */
+  runService(command: string): Promise<string>;
 }

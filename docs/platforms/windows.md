@@ -323,6 +323,19 @@ again, the row says "Last run stopped: Background sample was disabled" and
 no run starts; turned off, `schedules.json` holds no task.
 **Not run on Windows yet.**
 
+## Continuing services (#48)
+
+The smoke's service phase (screenshots 330 to 335, [continuing services](../background.md#continuing-services)),
+with a data folder of its own (`service-data`), installs the Service sample
+(Rust); nothing must have run (no beats in its content). In Manage
+extensions, Enter on **Service: Heartbeat** starts it: the row shows
+"Running · Beat N", `services.json` records it and, three seconds later, the
+count has grown. Disabling the package stops it: for three beats' time the
+count does not move. Enabled again, it starts again at once and the count
+grows; Enter on its row stops it, the count stops, and `services.json` holds
+no service.
+**Not run on Windows yet.**
+
 ## Text input and accessibility findings
 
 - **Text input / IME (#20):** the smoke now also opens the Rust command's

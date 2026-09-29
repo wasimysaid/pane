@@ -258,6 +258,50 @@ pub mod scheduled {
     pub use exports::pane::extension::scheduled_task::Guest;
 }
 
+/// A command's continuing service (`pane:extension/service`), which Pane
+/// keeps running in the background once the user starts it in Manage
+/// extensions, and starts again with its package's code. A command whose
+/// `pane.json` entry sets `"service": true` implements [`service::Guest`]
+/// too and calls [`service::export!`](crate::service::export) beside
+/// [`export!`]:
+///
+/// ```ignore
+/// pane_guest::export!(Heartbeat);
+/// pane_guest::service::export!(Heartbeat);
+/// ```
+///
+/// The service runs in an instance of its own, awaiting what it watches in
+/// a loop, and shows how it is doing with [`service::set_status`]. Await
+/// between pieces of work: every extension's calls are served on one
+/// thread.
+pub mod service {
+    #[doc(hidden)]
+    pub mod provider {
+        wit_bindgen::generate!({
+            path: "../../wit",
+            world: "service-provider",
+            pub_export_macro: true,
+            default_bindings_module: "pane_guest::service::provider",
+        });
+    }
+
+    #[doc(hidden)]
+    pub mod status {
+        wit_bindgen::generate!({
+            path: "../../wit",
+            world: "service-status-user",
+            default_bindings_module: "pane_guest::service::status",
+        });
+    }
+
+    #[doc(inline)]
+    pub use provider::export;
+    pub use provider::exports::pane::extension::service::Guest;
+    /// Shows `text` as the running service's status in Manage extensions;
+    /// refused anywhere but in the service's own run.
+    pub use status::pane::extension::service_status::set_status;
+}
+
 pub mod http;
 
 /// The custom view type of a command that has none: `type CustomView =

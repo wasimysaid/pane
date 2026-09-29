@@ -27,8 +27,8 @@ pub use helpers::runner::{MAX_HELPER_INPUT, MAX_HELPER_OUTPUT};
 pub use http::HttpLimits;
 pub use launcher::{
     BackgroundChanges, BuildFailure, CommandRegistration, CustomViewSnapshot, Development,
-    FormField, FormView, Launcher, LauncherView, Question, Row, ScheduledTask, Screen, Status,
-    TaskOutcome, Unavailable,
+    FormField, FormView, Launcher, LauncherView, Question, RESTART_DELAY, Row, ScheduledTask,
+    Screen, ServiceOutcome, ServiceState, Status, TaskOutcome, Unavailable,
 };
 pub use links::LinkOpener;
 pub use operations::{MAX_CALL_DEPTH, MAX_OPERATION_JSON};

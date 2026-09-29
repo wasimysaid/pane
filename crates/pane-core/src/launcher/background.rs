@@ -1,11 +1,12 @@
 //! Running installed packages' background work: scheduled tasks (see
-//! `scheduled`).
+//! `scheduled`) and continuing services (see `services`).
 //!
 //! Background work runs only in a launcher made to run it
 //! ([`Launcher::with_background`]): a thread of its own (the driver) looks
 //! at what is due whenever something changed (the user turned a schedule on
-//! or off, a package was enabled, reloaded, retried or otherwise changed, a
-//! run ended) and whenever the next piece of work falls due on the
+//! or off or started or stopped a service, a package was enabled, reloaded,
+//! retried or otherwise changed, a run ended) and whenever the next piece
+//! of work falls due (a task's next run, a failed service's restart) on the
 //! launcher's clock, then starts it in the runtime and waits for it there.
 //! The runtime runs it beside the calls it serves (see
 //! [`crate::runtime::Runtime::run_task_with`]); the window's thread never
@@ -58,10 +59,12 @@ pub(super) type Pending = std::pin::Pin<Box<dyn Future<Output = Finished> + Send
 /// Background work that ended, for the launcher to note.
 pub(super) enum Finished {
     Task(super::scheduled::Ended),
+    Service(super::services::Ended),
 }
 
 /// Changes of the state of a launcher's background work: its tasks' runs
-/// starting and ending. Made by [`Launcher::background_changes`].
+/// and its services starting and ending, and the services' statuses. Made
+/// by [`Launcher::background_changes`].
 pub struct BackgroundChanges(watch::Receiver<u64>);
 
 impl BackgroundChanges {
@@ -75,11 +78,11 @@ impl BackgroundChanges {
 
 impl Launcher {
     /// This launcher running installed packages' background work (their
-    /// scheduled tasks), timed by `clock`, normally
+    /// scheduled tasks and continuing services), timed by `clock`, normally
     /// [`crate::clock::SystemClock`]; a thread of its own starts what is
     /// due, from now on, until every handle to this launcher is dropped.
-    /// Without it, turning a schedule on explains that this Pane runs no
-    /// background work. Tell the window about changes first
+    /// Without it, turning a schedule on or starting a service explains that
+    /// this Pane runs no background work. Tell the window about changes first
     /// ([`Launcher::with_development`]): the background work tells it
     /// through the launcher this makes.
     pub fn with_background(self, clock: Arc<dyn Clock>) -> Self {
@@ -105,7 +108,8 @@ impl Launcher {
     }
 
     /// Changes of the state of this launcher's background work, from now
-    /// on: its tasks' runs starting and ending.
+    /// on: its tasks' runs and its services starting and ending, and the
+    /// services' statuses.
     pub fn background_changes(&self) -> BackgroundChanges {
         let revision = match &self.background {
             Some(background) => background.revision.subscribe(),
@@ -136,18 +140,27 @@ impl Launcher {
     /// and when the next piece falls due, if one is waiting.
     fn start_due(&self) -> (Vec<Pending>, Option<SystemTime>) {
         let now = self.now();
-        let (started, next, save) = {
+        let (mut started, next, save, services, restart, services_started) = {
             let mut state = self.lock();
-            self.start_due_tasks(&mut state, now)
+            let (started, next, save) = self.start_due_tasks(&mut state, now);
+            let (services, restart, services_started) = self.start_due_services(&mut state, now);
+            (started, next, save, services, restart, services_started)
         };
         if save {
             // Recorded before anyone is told, so what they read is on record.
             self.record_tasks();
+        }
+        if save || services_started {
             self.changed();
             if let Some(background) = &self.background {
                 background.changed();
             }
         }
+        started.extend(services);
+        let next = match (next, restart) {
+            (Some(next), Some(restart)) => Some(next.min(restart)),
+            (next, restart) => next.or(restart),
+        };
         (started, next)
     }
 
@@ -155,6 +168,7 @@ impl Launcher {
     fn finish(&self, finished: Finished) {
         match finished {
             Finished::Task(ended) => self.finish_task(ended),
+            Finished::Service(ended) => self.finish_service(ended),
         }
     }
 }

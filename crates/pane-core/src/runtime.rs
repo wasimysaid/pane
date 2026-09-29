@@ -48,7 +48,7 @@ use supervisor::{NotSent, Shared};
 pub(crate) mod bindings {
     wasmtime::component::bindgen!({
         path: "../../wit",
-        world: "extension-with-files",
+        world: "extension-with-services",
         imports: {
             "pane:extension/operations": store,
             "pane:extension/helpers": store,
@@ -104,6 +104,15 @@ mod scheduled_bindings {
     });
 }
 
+/// The `service` export of a command with a continuing service.
+mod service_bindings {
+    wasmtime::component::bindgen!({
+        path: "../../wit",
+        world: "service-provider",
+        exports: { default: async | store },
+    });
+}
+
 /// The `published-operations` export of a component serving operations.
 mod operations_bindings {
     wasmtime::component::bindgen!({
@@ -114,7 +123,9 @@ mod operations_bindings {
 }
 
 use bindings::exports::pane::extension::command;
-use bindings::pane::extension::{applications, cache, content, credentials, settings};
+use bindings::pane::extension::{
+    applications, cache, content, credentials, service_status, settings,
+};
 use indexed_bindings::exports::pane::extension::indexed_results;
 use root_bindings::exports::pane::extension::root_results;
 
@@ -151,6 +162,9 @@ const COMMAND_SEARCH_INTERFACE: &str = "pane:extension/command-search@0.1.0";
 
 /// The interface a command with a schedule also exports.
 const SCHEDULED_TASK_INTERFACE: &str = "pane:extension/scheduled-task@0.1.0";
+
+/// The interface a command with a continuing service also exports.
+const SERVICE_INTERFACE: &str = "pane:extension/service@0.1.0";
 
 /// What a result a command answers with shows as a row: the fields its
 /// computed root results, indexed results and search results share (each
@@ -252,6 +266,8 @@ pub(crate) struct Exports {
     pub search: bool,
     /// `scheduled-task`: it runs a scheduled task.
     pub scheduled_task: bool,
+    /// `service`: it runs a continuing service.
+    pub service: bool,
 }
 
 /// Work an installed package does in the background, beside the calls the
@@ -259,7 +275,14 @@ pub(crate) struct Exports {
 pub(crate) enum Work {
     /// One run of the scheduled task of the command with this manifest id.
     Task { command: String },
+    /// The continuing service of the command with this manifest id, which
+    /// shows its status through `status`.
+    Service { command: String, status: StatusSink },
 }
+
+/// Where a running service's status goes: told each text the service sets
+/// (see `service-status` in `wit/background.wit`), on the runtime's thread.
+pub(crate) type StatusSink = Arc<dyn Fn(String) + Send + Sync>;
 
 /// The system's applications as the runtime's guests and the launcher see
 /// them; replaceable, for tests.
@@ -1067,6 +1090,29 @@ impl Runtime {
         self.background(component, work, data)
     }
 
+    /// Runs the continuing service of the command with manifest id
+    /// `command` in `component`, in the background, with `data`, as
+    /// [`Runtime::run_task_with`] runs a task, until it returns, its
+    /// generation ends or the returned [`StopCall`] is dropped. Each status
+    /// it sets is handed to `status`, on the runtime's thread, while it
+    /// runs; none once it was stopped.
+    pub(crate) fn run_service_with(
+        &self,
+        component: &Path,
+        command: &str,
+        data: PackageData,
+        status: StatusSink,
+    ) -> (
+        StopCall,
+        impl Future<Output = Result<String, CallError>> + Send + 'static,
+    ) {
+        let work = Work::Service {
+            command: command.to_owned(),
+            status,
+        };
+        self.background(component, work, data)
+    }
+
     /// Starts `work` of the package in `component` in the background (see
     /// [`Runtime::run_task_with`]).
     fn background(
@@ -1384,6 +1430,8 @@ pub(crate) struct GuestState {
     helpers: Helpers,
     /// Identifies this instance as the owner of the helpers it starts.
     owner: u64,
+    /// Where the status goes, if this instance runs a continuing service.
+    status: Option<StatusSink>,
 }
 
 impl Drop for GuestState {
@@ -1515,6 +1563,24 @@ impl applications::Host for GuestState {
     }
 }
 
+impl service_status::Host for GuestState {
+    fn set_status(&mut self, text: String) -> Result<(), String> {
+        // Code whose generation ended shows nothing more.
+        if self.stopped().is_some() {
+            return Err(
+                "this code of the extension was stopped (disabled, reloaded or updated)".into(),
+            );
+        }
+        match &self.status {
+            Some(status) => {
+                status(text);
+                Ok(())
+            }
+            None => Err("only a running service can set its status".into()),
+        }
+    }
+}
+
 impl WasiView for GuestState {
     fn ctx(&mut self) -> WasiCtxView<'_> {
         WasiCtxView {
@@ -1537,7 +1603,7 @@ impl WasiHttpView for GuestState {
 /// A running guest instance of one component.
 struct Instance {
     store: Store<GuestState>,
-    bindings: bindings::ExtensionWithFiles,
+    bindings: bindings::ExtensionWithServices,
     /// Its root results export, if it has one.
     root_results: Option<root_bindings::RootResultsProvider>,
     /// Its indexed results export, if it has one.
@@ -1550,6 +1616,8 @@ struct Instance {
     command_search: Option<search_bindings::CommandSearchProvider>,
     /// Its scheduled task export, if it has a schedule.
     scheduled_task: Option<scheduled_bindings::ScheduledTaskProvider>,
+    /// Its service export, if it has a continuing service.
+    service: Option<service_bindings::ServiceProvider>,
 }
 
 /// What background work's guest answered, or how it failed.
@@ -1667,6 +1735,10 @@ impl Code {
             |state| state,
         )
         .expect("registering files in a fresh linker cannot conflict");
+        service_status::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| {
+            state
+        })
+        .expect("registering service status in a fresh linker cannot conflict");
         Code { engine, linker }
     }
 
@@ -1795,7 +1867,15 @@ impl Code {
                 ))
             })?;
         }
-        bindings::ExtensionWithFilesPre::new(pre).map_err(interface)?;
+        if exports.service {
+            service_bindings::ServiceProviderPre::new(pre.clone()).map_err(|error| {
+                CallError::Interface(format!(
+                    "its manifest gives it a service, but it does not export \
+                     {SERVICE_INTERFACE} with the functions Pane calls: {error:#}"
+                ))
+            })?;
+        }
+        bindings::ExtensionWithServicesPre::new(pre).map_err(interface)?;
         Ok(Checked { network })
     }
 }
@@ -2658,6 +2738,29 @@ impl Host {
                         .await
                 })
             }
+            Work::Service { command, status } => {
+                let Some(service) = instance
+                    .service
+                    .as_ref()
+                    .map(|provider| provider.pane_extension_service().clone())
+                else {
+                    let _ = reply.send(Err(CallError::Interface(format!(
+                        "it does not export {SERVICE_INTERFACE}"
+                    ))));
+                    return;
+                };
+                Box::pin(async move {
+                    let mut instance = instance;
+                    // Only this instance, running the service, shows a status.
+                    instance.store.data_mut().status = Some(status);
+                    instance
+                        .store
+                        .run_concurrent(async |store| {
+                            service.call_run_service(store, command).await
+                        })
+                        .await
+                })
+            }
         };
         self.background.push(Background {
             component: path,
@@ -2736,6 +2839,7 @@ impl Host {
                 directory: self.directory.clone(),
                 owner: self.helpers.new_owner(),
                 helpers: self.helpers.clone(),
+                status: None,
             },
         );
         store.limiter(|state| &mut state.limits);
@@ -2746,7 +2850,7 @@ impl Host {
             .instantiate_async(&mut store, &component)
             .await
             .map_err(load)?;
-        let bindings = bindings::ExtensionWithFiles::new(&mut store, &instance).map_err(load)?;
+        let bindings = bindings::ExtensionWithServices::new(&mut store, &instance).map_err(load)?;
         // Only a command that computes root results exports them.
         let root_results = root_bindings::RootResultsProvider::new(&mut store, &instance).ok();
         // Only a command that supplies results ahead of the query exports
@@ -2763,6 +2867,8 @@ impl Host {
         // Only a command with a schedule exports its task.
         let scheduled_task =
             scheduled_bindings::ScheduledTaskProvider::new(&mut store, &instance).ok();
+        // Only a command with a continuing service exports it.
+        let service = service_bindings::ServiceProvider::new(&mut store, &instance).ok();
         Ok(Instance {
             store,
             bindings,
@@ -2772,6 +2878,7 @@ impl Host {
             operations,
             command_search,
             scheduled_task,
+            service,
         })
     }
 
@@ -3229,6 +3336,66 @@ mod tests {
             Vec::<PathBuf>::new()
         );
         assert_eq!(lock(&crashes).len(), 1, "a stopped run is no crash");
+    }
+
+    /// A service runs in the background beside the calls, handing each
+    /// status it sets to its sink, and stops with its generation: its
+    /// instance goes, and no status arrives after. A service answers how it
+    /// finished, or an error; a status set outside a service is refused.
+    #[test]
+    fn a_service_shows_its_status_and_stops_with_its_generation() {
+        use crate::extension_data::DataKind;
+        use std::time::{Duration, Instant};
+
+        let data = tempfile::tempdir().unwrap();
+        let packages = ExtensionData::open(data.path());
+        let identity = PackageIdentity::local(data.path()).unwrap();
+        let owned = packages.owned_by(&identity);
+        let component = guest("sample_service.wasm");
+        let runtime = Runtime::start().unwrap();
+        let statuses = Arc::new(Mutex::new(Vec::<String>::new()));
+        let shown = statuses.clone();
+        let sink: StatusSink = Arc::new(move |text| lock(&shown).push(text));
+        let (_stop, run) =
+            runtime.run_service_with(&component, "heartbeat", owned.clone(), sink.clone());
+        until("the first beat", || !lock(&statuses).is_empty());
+        assert_eq!(lock(&statuses)[0], "Beat 1");
+        assert_eq!(
+            block_on(runtime.background_running()),
+            vec![component.clone()]
+        );
+        // A call is served while the service waits.
+        let asked = Instant::now();
+        let view = block_on(runtime.get_view_with(&component, Some(owned.clone()))).unwrap();
+        assert!(asked.elapsed() < Duration::from_secs(5), "the call waited");
+        assert_eq!(view.title, "Heartbeat: a continuing service");
+
+        packages.set_enabled(&identity, false);
+
+        assert_eq!(block_on(run), Err(CallError::Disabled));
+        assert_eq!(
+            block_on(runtime.background_running()),
+            Vec::<PathBuf>::new()
+        );
+        // Its instance went with it: nothing of it runs to beat again.
+
+        packages.set_enabled(&identity, true);
+        let owned = packages.owned_by(&identity);
+        owned
+            .set(DataKind::Settings, "beat-mode", "finish")
+            .unwrap();
+        let (_stop, run) =
+            runtime.run_service_with(&component, "heartbeat", owned.clone(), sink.clone());
+        let count = owned.get(DataKind::Content, "beats").unwrap().unwrap();
+        assert_eq!(block_on(run), Ok(format!("Finished after {count} beats")));
+        owned.set(DataKind::Settings, "beat-mode", "fail").unwrap();
+        let (_stop, run) = runtime.run_service_with(&component, "heartbeat", owned.clone(), sink);
+        assert_eq!(
+            block_on(run),
+            Err(CallError::Guest(
+                "Heartbeat stops with an error, to show how a failed service looks".into()
+            ))
+        );
     }
 
     /// A call of an ended generation served after the package's next

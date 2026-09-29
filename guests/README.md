@@ -760,6 +760,75 @@ The background samples ([Rust](sample-background),
 packages in [`packages/`](packages)) count each run, and their command
 chooses how the next runs behave (answer, fail, crash or wait 10 seconds).
 
+## A continuing service
+
+A command can run a service Pane keeps running in the background once the
+user starts it in Manage extensions (installing starts nothing). Set
+`"service": true` on the command in `pane.json`, export
+`pane:extension/service` ([`wit/background.wit`](../wit/background.wit))
+beside the command, and show how it is doing with `set_status`:
+
+```rust
+pane_guest::export!(Heartbeat);
+pane_guest::service::export!(Heartbeat);
+
+impl pane_guest::service::Guest for Heartbeat {
+    async fn run_service(command: String) -> Result<String, String> {
+        let mut beats = 0;
+        loop {
+            beats += 1;
+            pane_guest::service::set_status(&format!("Beat {beats}"))?;
+            // Await between pieces of work.
+            wasip3::clocks::monotonic_clock::wait_for(1_000_000_000).await;
+        }
+    }
+}
+```
+
+JavaScript or TypeScript: add `"pane": { "service": true }` to
+`package.json`, export `service`, and import `setStatus` (the build links
+the status only into a command whose bundle imports it):
+
+```ts
+import type { Service } from "@pane/extension";
+import { setStatus } from "pane:extension/service-status@0.1.0";
+import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
+
+export const service: Service = {
+  async runService(command) {
+    for (let beat = 1; ; beat++) {
+      setStatus(`Beat ${beat}`);
+      await waitFor(1_000_000_000);
+    }
+  },
+};
+```
+
+Its lifetime ([continuing services](../docs/background.md#continuing-services)):
+
+- Started, it runs whenever its package's code runs: at once, when Pane
+  starts, and again at once after the package is enabled, reloaded,
+  updated or retried. One run at a time, in an **instance of its own**:
+  keep what must survive in extension data.
+- Disabling, reloading, updating or uninstalling the package, or the user
+  stopping it, **stops it where it awaits**; its status goes with it.
+- Returning ends it: an answer is shown as how it finished, and it waits
+  for its package's code to start again; an error (throwing, in JS/TS) is
+  shown, and Pane starts it again a minute later. A crash does the same
+  and counts towards [pausing](../docs/pausing.md) the package.
+- **Await between pieces of work**: every extension's calls are served on
+  one thread. A service is judged by how long it computes between two
+  awaits, never by how long it has been running.
+- Its status is text shown on its row in Manage extensions; only the
+  service's own run can set it. Calling other packages' operations is
+  refused.
+
+The service samples ([Rust](sample-service),
+[JavaScript](sample-service-js), [TypeScript](sample-service-ts); packages
+in [`packages/`](packages)) beat every second, and their command chooses
+how the service behaves at its next beat (keep beating, fail, crash or
+finish).
+
 ## A command that takes a query
 
 The user can give any installed command an alias in Manage extensions, and

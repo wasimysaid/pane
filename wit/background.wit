@@ -4,13 +4,18 @@ package pane:extension@0.1.0;
 //
 // Background work: a command's scheduled task, which Pane runs every so
 // often in the background once the user turns its schedule on in Manage
-// extensions. Kept apart from extension.wit so a command without one is
-// unchanged: only a command whose `pane.json` entry declares a `schedule`
-// (`"schedule": { "everyMinutes": 15 }`) exports this interface, beside
-// `command`. Rust commands export it through pane-guest
-// (`pane_guest::scheduled::export!`), JS/TS commands by exporting
-// `scheduledTask` with `"scheduledTask": true` in their package.json's
-// `"pane"` options.
+// extensions, and a command's continuing service, which Pane keeps running
+// in the background once the user starts it there. Kept apart from
+// extension.wit so a command without either is unchanged: only a command
+// whose `pane.json` entry declares a `schedule`
+// (`"schedule": { "everyMinutes": 15 }`) exports `scheduled-task`, and
+// only one declaring `"service": true` exports `service`, beside
+// `command`. Rust commands export them through pane-guest
+// (`pane_guest::scheduled::export!`, `pane_guest::service::export!`),
+// JS/TS commands by exporting `scheduledTask` or `service` with
+// `"scheduledTask": true` or `"service": true` in their package.json's
+// `"pane"` options. A service shows its status through `service-status`,
+// which a JS/TS command imports only if its bundle uses it.
 // The header follows `package`: comments above it would document the package,
 // which extension.wit already does.
 
@@ -38,4 +43,59 @@ interface scheduled-task {
 /// exports it besides the `extension` world's `command`.
 world scheduled-task-provider {
   export scheduled-task;
+}
+
+interface service {
+  /// Runs the continuing service of the command `command` (its id in
+  /// `pane.json`) until it has nothing left to do, which is rarely: a
+  /// service normally runs as long as Pane lets it, awaiting what it
+  /// watches (a clock, a web request) in a loop, and shows how it is doing
+  /// with `service-status.set-status`. Returning ends it: an answer is shown
+  /// as how it finished, and it is not started again until its package's
+  /// code starts again (Pane starts, the package is enabled, reloaded,
+  /// updated or retried) or the user starts it again; an error is shown as
+  /// its failure, an ordinary outcome, and Pane starts it again a minute
+  /// later. A crash (a trap) counts towards pausing the package as any
+  /// crash does, and Pane starts it again a minute later unless that paused
+  /// it.
+  ///
+  /// Pane runs it in the background, in an instance of its own (not the
+  /// command's), which goes when it ends. It is stopped where it waits (and
+  /// code after that `await` never runs) when the package is disabled,
+  /// reloaded, updated, paused or uninstalled, or the user stops it; a
+  /// reload or an update starts the new code's service at once. Await
+  /// between pieces of work: Pane serves every extension's calls on one
+  /// thread, which a service computing without yielding holds, and a
+  /// service is judged by how long it computes between two awaits, never by
+  /// how long it has been running. A service cannot call other packages'
+  /// operations yet: such a call is refused.
+  run-service: async func(command: string) -> result<string, string>;
+}
+
+/// What a running service shows the user.
+interface service-status {
+  /// Shows `text` as the running service's status in Manage extensions,
+  /// in place of the one before ("Watching 3 feeds"). Only the service's
+  /// own run may set it: from anywhere else (a command's call, a scheduled
+  /// task) or once the service was stopped, it is refused. The status goes
+  /// when the service ends; it is not saved.
+  set-status: func(text: string) -> result<_, string>;
+}
+
+/// The service export alone: a command component with a service exports it
+/// besides the `extension` world's `command`.
+world service-provider {
+  export service;
+}
+
+/// Setting a running service's status, for guests that do.
+world service-status-user {
+  import service-status;
+}
+
+/// Everything Pane's host links for a command: the extension with its data,
+/// helpers and granted folder, and a service's status.
+world extension-with-services {
+  include extension-with-files;
+  import service-status;
 }

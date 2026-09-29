@@ -319,6 +319,7 @@ impl Launcher {
             let forget_hotkeys = self.forget_hotkeys_of(&mut self.lock(), identity);
             let forget_aliases = self.forget_aliases_of(&mut self.lock(), identity);
             let forget_tasks = self.forget_tasks_of(&mut self.lock(), identity);
+            let forget_services = self.forget_services_of(&mut self.lock(), identity);
             let files = self.lock().files.clone();
             let data = installation.data.clone();
             let store = installation.store.clone();
@@ -334,6 +335,9 @@ impl Launcher {
                 }
                 if let Some(Err(error)) = forget_tasks.map(|forget| forget()) {
                     problems.push(format!("could not forget its schedules: {error}"));
+                }
+                if let Some(Err(error)) = forget_services.map(|forget| forget()) {
+                    problems.push(format!("could not forget its services: {error}"));
                 }
                 // The folder it was granted is Pane's record, not its data:
                 // it goes whether or not data is kept, for every package

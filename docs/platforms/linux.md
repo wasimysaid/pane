@@ -748,6 +748,29 @@ the evidence kept of those frames is cropped to the row.
 | Turned off and on: a run waits | [324-schedule-running-cropped.png](evidence/linux-x11/324-schedule-running-cropped.png) |
 | Disabled while it waited, enabled again: the run was stopped | [326-schedule-stopped-cropped.png](evidence/linux-x11/326-schedule-stopped-cropped.png) |
 
+### Continuing services (#48)
+
+The smoke's service phase (screenshots 330 to 335, [continuing services](../background.md#continuing-services)),
+with a data folder of its own (`service-data`), installs the Service sample
+(Rust); nothing must have run (no beats in its content). In Manage
+extensions, Enter on **Service: Heartbeat** starts it: the row shows
+"Running · Beat N", `services.json` records it and, three seconds later, the
+count has grown. Disabling the package stops it: for three beats' time the
+count does not move. Enabled again, it starts again at once and the count
+grows; Enter on its row stops it, the count stops, and `services.json` holds
+no service.
+Run locally on 2026-09-29 (same system and Xvfb/lavapipe setup): all checks
+of the whole smoke passed, and frames 330 to 335 were looked at. As for
+the scheduled tasks, the kept evidence of Manage extensions' rows is
+cropped to the row, without the data folder's path.
+
+| Step | Evidence |
+| --- | --- |
+| Installed: nothing runs | [330-service-installed.png](evidence/linux-x11/330-service-installed.png) |
+| Started: running, with its status | [332-service-running-cropped.png](evidence/linux-x11/332-service-running-cropped.png) |
+| Disabled, then enabled: started again at once | [334-service-restarted-cropped.png](evidence/linux-x11/334-service-restarted-cropped.png) |
+| Stopped | [335-service-turned-off-cropped.png](evidence/linux-x11/335-service-turned-off-cropped.png) |
+
 ## Text input and accessibility findings
 
 - **Text input / IME (#20):** extension forms have a text field (GPUI CE's

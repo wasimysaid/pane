@@ -1464,4 +1464,58 @@ if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the schedule changed 
 Stop-Pane $process
 if (-not (Select-String -Quiet -SimpleMatch '"tasks": {}' $schedules)) { throw "the schedule turned off is still recorded" }
 
+# Continuing services (#48): the service sample's Heartbeat sets
+# "service": true. Installing it starts nothing; its row in Manage extensions
+# starts it, and it runs in the background, beating every second: the row
+# shows its status, and the count it keeps grows. Disabling the package stops
+# it where it waits (the count stops), enabling it starts it again at once,
+# and stopping it on its row stops it for good (the record forgets it). A
+# data folder of its own keeps the rows in a known order: the package's four
+# rows, then Service: Heartbeat.
+$data = Join-Path $OutDir "service-data"
+if (Test-Path $data) { Remove-Item -Recurse -Force $data }
+$env:PANE_DATA_DIR = $data
+$services = Join-Path $data "extensions/services.json"
+$process = Start-Pane "stderr-service.log" @("--install", "target/guests/packages/sample-service")
+Send "{ENTER}"; Start-Sleep -Seconds 2   # Install; Heartbeat is selected
+Capture "330-service-installed.png"
+Check "330-service-installed.png" "9fd8a8"   # "Installed Service sample ..."
+if ((Kept "beats") -ne "none") { throw "installing started the service" }
+Send "manage"; Start-Sleep -Seconds 1
+Send "{ENTER}"; Start-Sleep -Seconds 1   # Manage extensions
+Send "{DOWN 4}"; Start-Sleep -Seconds 1   # Service: Heartbeat
+Capture "331-service-stopped.png"   # "Stopped · Start it to run in the background while Pane runs"
+Check "331-service-stopped.png" "364355" 3000
+Send "{ENTER}"; Start-Sleep -Seconds 3   # start it
+Capture "332-service-running.png"   # "Running · Beat N"
+Check "332-service-running.png" "9fd8a8"   # "Heartbeat runs in the background from now on"
+$first = Kept "beats"
+if ($first -eq "none") { throw "starting the service did not run it" }
+if (-not (Select-String -Quiet -SimpleMatch '#heartbeat"' $services)) { throw "the started service was not recorded" }
+Start-Sleep -Seconds 3
+if ([int](Kept "beats") -le [int]$first) { throw "the service did not go on beating" }
+Send "{UP 4}"   # Service sample
+Send "{ENTER}"; Start-Sleep -Seconds 2   # disable it while its service waits
+Capture "333-service-disabled.png"
+Check "333-service-disabled.png" "9fd8a8"   # "Disabled Service sample"
+$stopped = Kept "beats"
+Start-Sleep -Seconds 3   # three beats' time
+if ((Kept "beats") -ne $stopped) { throw "the disabled package's service beat on" }
+Send "{ENTER}"; Start-Sleep -Seconds 3   # enable it again: its service starts again at once
+Send "{DOWN 4}"; Start-Sleep -Seconds 1   # Service: Heartbeat
+Capture "334-service-restarted.png"   # "Running · Beat N", counting on
+Check "334-service-restarted.png" "364355" 3000
+if ([int](Kept "beats") -le [int]$stopped) { throw "enabling did not start the service again" }
+Send "{ENTER}"; Start-Sleep -Seconds 2   # stop it
+Capture "335-service-turned-off.png"
+Check "335-service-turned-off.png" "9fd8a8"   # "Heartbeat was stopped"
+$stopped = Kept "beats"
+Start-Sleep -Seconds 3
+if ((Kept "beats") -ne $stopped) { throw "the stopped service beat on" }
+$shots = "331-service-stopped", "332-service-running", "333-service-disabled", "334-service-restarted", "335-service-turned-off" | ForEach-Object { Join-Path $OutDir "$_.png" }
+python "$PSScriptRoot/check_screenshot.py" --distinct @shots
+if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the service changed nothing" }
+Stop-Pane $process
+if (-not (Select-String -Quiet -SimpleMatch '"services": []' $services)) { throw "the stopped service is still recorded" }
+
 Write-Output "screenshots in $OutDir"

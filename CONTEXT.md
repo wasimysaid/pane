@@ -192,6 +192,10 @@ _Avoid_: Daemon, worker (a JavaScript worker is the Node helper's), background c
 A command's background work its package manifest declares with a schedule (every so many minutes, from 1 to 1440): Pane runs it only after the user turns its schedule on in Manage extensions, at once and then once per interval while the package may run, one run at a time, and shows its latest result there; what fell due while it could not run runs once.
 _Avoid_: Cron job, timer, periodic command
 
+**Continuing service**:
+A command's background work its package manifest declares with `"service": true`, which Pane keeps running once the user starts it in Manage extensions: whenever its package's code runs (starting again with Pane and with each new generation), one run at a time, showing the status it sets; an error or a crash starts it again a minute later, and a crash counts towards pausing its package. Unused, it never runs.
+_Avoid_: Daemon, background process (it is not a process), long-running command
+
 **Supported platforms**:
 The operating systems a package, a command or an action declares it works on: a plain list, not a rule language. A declaration is not evidence of native support.
 _Avoid_: Compatibility rules, target matrix

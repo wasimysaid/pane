@@ -1,0 +1,15 @@
+{
+  "name": "pane-sample-service-ts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pane's service sample, Heartbeat, in TypeScript",
+  "license": "Apache-2.0 OR MIT",
+  "type": "module",
+  "main": "src/index.ts",
+  "pane": {
+    "service": true
+  },
+  "devDependencies": {
+    "@pane/extension": "file:../js"
+  }
+}
